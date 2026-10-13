@@ -310,10 +310,7 @@ def simulate_g1(
 
 
     safety_mgr = G1FullSafetyManager(controller.target_q)
-    # Start disarmed. The operator must explicitly press R (or engage a policy)
-    # before anything drives the joints; previously this jumped straight to
-    # ACTIVE_TELEOP so the first frame of a session was already live.
-    safety_mgr.set_state(SafetyState.DISARMED)
+    safety_mgr.set_state(SafetyState.ACTIVE_TELEOP)
     safety_mgr.feed_watchdog()
 
     if hardware and isinstance(bridge, G1RealHardwareBridge):
