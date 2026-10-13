@@ -7,23 +7,61 @@ from typing import List, Optional, Tuple
 import numpy as np
 import mujoco
 from mujoco import viewer as mj_viewer
-from g1_constants import (
-    DEFAULT_KP, DEFAULT_KD, NOMINAL_STAND_Q, NUM_MOTORS, NUM_BODY_MOTORS,
+try:  # package and flat-script imports both work
+    from .g1_constants import (    OFFICIAL_KP, OFFICIAL_KD, NOMINAL_STAND_Q, NUM_BODY_MOTORS,
     JOINT_NAMES_29DOF, L_SHOULDER_PITCH, L_WRIST_YAW, R_SHOULDER_PITCH, R_WRIST_YAW,
-    LEFT_ARM_INDICES, RIGHT_ARM_INDICES, LEG_JOINT_INDICES, WAIST_INDICES
-)
-from g1_robot import G1Robot
-from g1_hardware_bridge import create_g1_bridge, G1RealHardwareBridge
-from g1_trajectory_manager import TrajectoryRecorder, TrajectoryPlayer, G1MovementScripts
-from g1_policy import UnitreeG1Robot
-from g1_policies import StandPolicy, AnkleSwingPolicy, WavePolicy, JointPositionPolicy
-from g1_state import G1State
-from g1_safety import G1FullSafetyManager, SafetyState
+    LEFT_ARM_JOINTS, RIGHT_ARM_JOINTS, LEG_JOINTS, WAIST_JOINTS)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_constants import (OFFICIAL_KP, OFFICIAL_KD, NOMINAL_STAND_Q, NUM_BODY_MOTORS,
+JOINT_NAMES_29DOF, L_SHOULDER_PITCH, L_WRIST_YAW, R_SHOULDER_PITCH, R_WRIST_YAW,
+LEFT_ARM_JOINTS, RIGHT_ARM_JOINTS, LEG_JOINTS, WAIST_JOINTS)
+try:  # package and flat-script imports both work
+    from .g1_robot import (    G1Robot)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_robot import (G1Robot)
+try:  # package and flat-script imports both work
+    from .g1_hardware_bridge import (    create_g1_bridge,
+    G1RealHardwareBridge)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_hardware_bridge import (create_g1_bridge,
+G1RealHardwareBridge)
+try:  # package and flat-script imports both work
+    from .g1_trajectory_manager import (    TrajectoryRecorder,
+    TrajectoryPlayer,
+    G1MovementScripts)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_trajectory_manager import (TrajectoryRecorder,
+TrajectoryPlayer,
+G1MovementScripts)
+try:  # package and flat-script imports both work
+    from .g1_policy import (    UnitreeG1Robot)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_policy import (UnitreeG1Robot)
+try:  # package and flat-script imports both work
+    from .g1_policies import (    StandPolicy,
+    AnkleSwingPolicy,
+    WavePolicy,
+    JointPositionPolicy)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_policies import (StandPolicy,
+AnkleSwingPolicy,
+WavePolicy,
+JointPositionPolicy)
+try:  # package and flat-script imports both work
+    from .g1_state import (    G1State)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_state import (G1State)
+try:  # package and flat-script imports both work
+    from .g1_safety import (    G1FullSafetyManager,
+    SafetyState)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_safety import (G1FullSafetyManager,
+SafetyState)
 
 
 class G1CartesianController:
-    MAX_REACH_RADIUS = 0.34
-    MIN_REACH_RADIUS = 0.14
+    MAX_REACH_RADIUS = 0.40
+    MIN_REACH_RADIUS = 0.10
 
     def __init__(self, robot: G1Robot, right_arm: bool = False):
         self.robot = robot
@@ -46,13 +84,13 @@ class G1CartesianController:
     def set_arm(self, right_arm: bool):
         self.right_arm = right_arm
         if right_arm:
-            self.arm_indices = RIGHT_ARM_INDICES
-            self.idle_indices = LEFT_ARM_INDICES
+            self.arm_indices = RIGHT_ARM_JOINTS
+            self.idle_indices = LEFT_ARM_JOINTS
             self.ee_bid = self.robot.right_hand_bid
             self.shoulder_bid = self.right_shoulder_bid
         else:
-            self.arm_indices = LEFT_ARM_INDICES
-            self.idle_indices = RIGHT_ARM_INDICES
+            self.arm_indices = LEFT_ARM_JOINTS
+            self.idle_indices = RIGHT_ARM_JOINTS
             self.ee_bid = self.robot.left_hand_bid
             self.shoulder_bid = self.left_shoulder_bid
 
@@ -70,47 +108,47 @@ class G1CartesianController:
         elif dist < self.MIN_REACH_RADIUS:
             vec = vec * (self.MIN_REACH_RADIUS / dist)
             was_clamped = True
-        if vec[0] < 0.04:
-            vec[0] = 0.04
-            was_clamped = True
         if not self.right_arm:
-            if vec[1] < 0.02:
-                vec[1] = 0.02
+            if vec[1] < 0.01:
+                vec[1] = 0.01
                 was_clamped = True
-        elif vec[1] > -0.02:
-            vec[1] = -0.02
+        elif vec[1] > -0.01:
+            vec[1] = -0.01
             was_clamped = True
         safe_goal = shoulder_pos + vec
         return (safe_goal, was_clamped)
 
-    def step_ik(self, raw_goal: np.ndarray, damping: float = 0.0001, cart_gain: float = 0.1, nullspace_gain: float = 0.10) -> Tuple[np.ndarray, bool]:
+    def step_ik(self, raw_goal: np.ndarray, damping: float = 0.0005, cart_gain: float = 0.5, nullspace_gain: float = 0.05) -> Tuple[np.ndarray, bool]:
         safe_goal, was_clamped = self.clamp_to_safe_workspace(raw_goal)
-        cur_p = self.robot.get_hand_pos(self.right_arm)
-        err = safe_goal - cur_p
-        jacp = np.zeros((3, self.robot.model.nv))
-        mujoco.mj_jacBody(self.robot.model, self.robot.data, jacp, None, self.ee_bid)
         arm_dofs = [self.robot._dof_adr[i] for i in self.arm_indices]
-        J_arm = jacp[:, arm_dofs]
-        shoulder_p = self.robot.data.xpos[self.shoulder_bid]
-        reach_d = np.linalg.norm(safe_goal - shoulder_p)
-        boundary_proximity = max(0.0, float(reach_d - 0.28) / 0.06)
-        adaptive_damping = damping + 0.01 * boundary_proximity ** 2
-        JJT = J_arm @ J_arm.T + adaptive_damping ** 2 * np.eye(3)
-        J_pinv = J_arm.T @ np.linalg.solve(JJT, np.eye(3))
-        dx = np.clip(err * cart_gain, -0.04, 0.04)
-        dq_task = J_pinv @ dx
-        N = np.eye(7) - J_pinv @ J_arm
-        q_cur_arm = self.robot.get_joint_positions()[self.arm_indices]
-        q_nom_arm = NOMINAL_STAND_Q[self.arm_indices]
-        dq_null_desired = nullspace_gain * (q_nom_arm - q_cur_arm)
-        dq_null_desired[3] += 0.6 * max(0.0, 0.45 - q_cur_arm[3])
-        dq_null = N @ dq_null_desired
-        dq_total = np.clip(dq_task + dq_null, -0.035, 0.035)
-        q_new = self.target_q[self.arm_indices] + dq_total
-        safe_min = self.joint_limits_min[self.arm_indices] + 0.03
-        safe_max = self.joint_limits_max[self.arm_indices] - 0.03
-        safe_min[3] = max(safe_min[3], 0.05)
-        self.target_q[self.arm_indices] = np.clip(q_new, safe_min, safe_max)
+        q_cur_arm = self.target_q[self.arm_indices].copy()
+
+        for _ in range(8):
+            cur_p = self.robot.get_hand_pos(self.right_arm)
+            err = safe_goal - cur_p
+            if np.linalg.norm(err) < 0.0003:
+                break
+            jacp = np.zeros((3, self.robot.model.nv))
+            mujoco.mj_jacBody(self.robot.model, self.robot.data, jacp, None, self.ee_bid)
+            J_arm = jacp[:, arm_dofs]
+            JJT = J_arm @ J_arm.T + (damping ** 2) * np.eye(3)
+            J_pinv = J_arm.T @ np.linalg.solve(JJT, np.eye(3))
+            dx = np.clip(err * cart_gain, -0.05, 0.05)
+            dq_task = J_pinv @ dx
+            N = np.eye(7) - J_pinv @ J_arm
+            q_nom_arm = NOMINAL_STAND_Q[self.arm_indices]
+            dq_null_desired = nullspace_gain * (q_nom_arm - q_cur_arm)
+            dq_null = N @ dq_null_desired
+            dq_total = np.clip(dq_task + dq_null, -0.06, 0.06)
+            q_cur_arm = q_cur_arm + dq_total
+            safe_min = self.joint_limits_min[self.arm_indices] + 0.02
+            safe_max = self.joint_limits_max[self.arm_indices] - 0.02
+            q_cur_arm = np.clip(q_cur_arm, safe_min, safe_max)
+            for k, adr in enumerate([self.robot._qpos_adr[i] for i in self.arm_indices]):
+                self.robot.data.qpos[adr] = q_cur_arm[k]
+            mujoco.mj_forward(self.robot.model, self.robot.data)
+
+        self.target_q[self.arm_indices] = q_cur_arm
         self.target_q[self.idle_indices] = NOMINAL_STAND_Q[self.idle_indices]
         return (safe_goal, was_clamped)
 
@@ -386,7 +424,7 @@ def main():
 
 
             if player is not None and player.is_playing:
-                q_frame, is_done = player.get_frame()
+                q_frame, _, _, _, is_done = player.get_frame()
                 if q_frame is not None:
                     controller.target_q[:] = q_frame[:]
                     is_playing_trajectory = True
@@ -424,17 +462,17 @@ def main():
                     tau_est=robot.get_joint_torques(),
                     base_pos=robot.get_base_pose()[0],
                     base_quat=robot.get_base_pose()[1],
-                    left_hand_pos=robot.get_hand_pos(False),
-                    right_hand_pos=robot.get_hand_pos(True),
+                    left_wrist_pos=robot.get_hand_pos(False),
+                    right_wrist_pos=robot.get_hand_pos(True),
                     imu_angvel=robot.get_imu_data()[1],
                     imu_linacc=robot.get_imu_data()[2],
                     left_foot_contact=robot.get_foot_contacts()[0],
                     right_foot_contact=robot.get_foot_contacts()[1],
                 )
-                action = G1Action.zero(num_body=NUM_BODY_MOTORS)
+                action = G1Action()
                 action.q_des[:] = controller.target_q
-                action.kp[:] = DEFAULT_KP[:NUM_BODY_MOTORS]
-                action.kd[:] = DEFAULT_KD[:NUM_BODY_MOTORS]
+                action.kp[:] = OFFICIAL_KP[:NUM_BODY_MOTORS]
+                action.kd[:] = OFFICIAL_KD[:NUM_BODY_MOTORS]
                 recorder.record_state(state, action, safe_target)
 
 

@@ -15,12 +15,16 @@ base_dir = pathlib.Path(__file__).resolve().parent
 if str(base_dir) not in sys.path:
     sys.path.insert(0, str(base_dir))
 
-from g1_constants import (
-    LEFT_ARM_INDICES,
-    RIGHT_ARM_INDICES,
+try:  # package and flat-script imports both work
+    from .g1_constants import (    LEFT_ARM_JOINTS,
+    RIGHT_ARM_JOINTS,
     NOMINAL_STAND_Q,
-    NUM_BODY_MOTORS,
-)
+    NUM_BODY_MOTORS)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_constants import (LEFT_ARM_JOINTS,
+RIGHT_ARM_JOINTS,
+NOMINAL_STAND_Q,
+NUM_BODY_MOTORS)
 
 
 class SinusoidalPositionalEncoding(nn.Module):
@@ -85,14 +89,15 @@ class G1ActionChunkingTransformer(nn.Module):
 
 
 class ParquetChunkDataset(Dataset):
-    def __init__(self, parquet_path: str, chunk_size: int = 50, max_episodes: int = 50):
+    def __init__(self, parquet_path: str, chunk_size: int = 50, max_episodes: int = 150):
         t = pq.read_table(
             parquet_path,
-            columns=["observation.state", "action", "episode_index"],
+            columns=["observation.state", "action", "episode_index", "task_index"],
         )
         states_raw = t["observation.state"].to_pylist()
         actions_raw = t["action"].to_pylist()
         episodes_raw = t["episode_index"].to_pylist()
+        tasks_raw = t["task_index"].to_pylist()
 
         self.samples = []
         n = len(states_raw)
@@ -108,10 +113,12 @@ class ParquetChunkDataset(Dataset):
             ep_len = ep_end - ep_start
             if ep_len <= chunk_size:
                 continue
-            for s in range(ep_start, ep_end - chunk_size, 5):
+            task_id = float(tasks_raw[ep_start])
+            for s in range(ep_start, ep_end - chunk_size, 4):
                 st = np.array(states_raw[s], dtype=np.float32)
+                st_conditioned = np.concatenate([st, [task_id]]).astype(np.float32)
                 act_chunk = np.array(actions_raw[s : s + chunk_size], dtype=np.float32)
-                self.samples.append((st, act_chunk))
+                self.samples.append((st_conditioned, act_chunk))
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -121,24 +128,66 @@ class ParquetChunkDataset(Dataset):
         return torch.from_numpy(s), torch.from_numpy(a)
 
 
+def collect_multi_robot_experience(num_robots: int = 4, steps_per_robot: int = 100) -> list[tuple[np.ndarray, np.ndarray]]:
+    from g1_env import G1PhysicsEnv
+    envs = [G1PhysicsEnv(render_mode="none", fix_base=True) for _ in range(num_robots)]
+    experiences: list[tuple[np.ndarray, np.ndarray]] = []
+    chunk_len = 50
+    for env in envs:
+        env.reset()
+        recent_s: list[np.ndarray] = []
+        recent_a: list[np.ndarray] = []
+        for _ in range(steps_per_robot):
+            act_7 = env.action_space.sample()
+            obs, rew, term, trunc, info = env.step(act_7)
+            q = env.robot.get_joint_positions()
+            left_arm = q[LEFT_ARM_JOINTS]
+            right_arm = q[RIGHT_ARM_JOINTS]
+            s_16 = np.concatenate([left_arm, right_arm, [0.0, 0.0]]).astype(np.float32)
+            a_16 = np.concatenate([act_7, np.zeros(7, dtype=np.float32), [0.0, 0.0]]).astype(np.float32)
+            recent_s.append(s_16)
+            recent_a.append(a_16)
+            if term or trunc:
+                env.reset()
+        for idx in range(0, len(recent_s) - chunk_len, 5):
+            st_cond = np.concatenate([recent_s[idx], [2.0]]).astype(np.float32)
+            chunk = np.array(recent_a[idx : idx + chunk_len], dtype=np.float32)
+            experiences.append((st_cond, chunk))
+        env.close()
+    return experiences
+
+
 def train_act_model(
     parquet_path: str,
     output_dir: str = "models/g1_act",
     epochs: int = 5,
     batch_size: int = 32,
     chunk_size: int = 50,
+    num_robots: int = 4,
+    log_weight_telemetry: bool = True,
 ):
     out_dir = pathlib.Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    gpu_info = f" ({torch.cuda.get_device_name(0)})" if device.type == "cuda" else ""
     print(f"[TRAIN] Loading dataset from: {parquet_path}")
-    ds = ParquetChunkDataset(parquet_path, chunk_size=chunk_size, max_episodes=40)
-    print(f"[TRAIN] Created {len(ds)} training chunks. Device: {device}")
+    ds = ParquetChunkDataset(parquet_path, chunk_size=chunk_size, max_episodes=80)
+    
+    if num_robots > 1:
+        print(f"[TRAIN] Running {num_robots} parallel G1 robots in simulation to collect interactive rollouts...")
+        extra_exp = collect_multi_robot_experience(num_robots=num_robots, steps_per_robot=150)
+        ds.samples.extend(extra_exp)
+        print(f"[TRAIN] Added {len(extra_exp)} interactive rollout chunks from {num_robots} parallel robots.")
+
+    print(f"[TRAIN] Total training dataset: {len(ds)} chunks. Device: {device}{gpu_info}")
     loader = DataLoader(ds, batch_size=batch_size, shuffle=True)
 
-    model = G1ActionChunkingTransformer(state_dim=16, action_dim=16, chunk_size=chunk_size).to(device)
+    model = G1ActionChunkingTransformer(state_dim=17, action_dim=16, chunk_size=chunk_size).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
     criterion = nn.L1Loss()
+
+    weight_history_file = out_dir / "weight_training_telemetry.json"
+    telemetry_records: list[dict] = []
 
     model.train()
     for epoch in range(1, epochs + 1):
@@ -157,15 +206,44 @@ def train_act_model(
             count += 1
         elapsed = time.time() - t0
         avg_loss = total_loss / max(1, count)
-        print(f"[TRAIN] Epoch {epoch}/{epochs} | L1 Loss: {avg_loss:.5f} | Time: {elapsed:.2f}s")
+
+        weight_stats: dict[str, dict[str, float]] = {}
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                w_norm = float(param.data.norm().item())
+                g_norm = float(param.grad.norm().item()) if param.grad is not None else 0.0
+                weight_stats[name] = {"norm": round(w_norm, 4), "grad": round(g_norm, 6)}
+
+        rec = {
+            "epoch": epoch,
+            "l1_loss": round(avg_loss, 5),
+            "time_sec": round(elapsed, 2),
+            "num_parallel_robots": num_robots,
+            "weights": weight_stats,
+        }
+        telemetry_records.append(rec)
+
+        summary_keys = ["state_proj.weight", "action_head.weight"]
+        summary_str = " | ".join(
+            f"{k.split('.')[0]}: W={weight_stats[k]['norm']:.2f},G={weight_stats[k]['grad']:.4f}"
+            for k in summary_keys
+            if k in weight_stats
+        )
+        print(f"[TRAIN] Epoch {epoch}/{epochs} | L1 Loss: {avg_loss:.5f} | Time: {elapsed:.2f}s | {summary_str}")
+
+    import json
+    with open(weight_history_file, "w", encoding="utf-8") as f:
+        json.dump(telemetry_records, f, indent=2)
+    print(f"[TRAIN] Weight telemetry logged for every layer to: {weight_history_file}")
 
     model_path = out_dir / "act_policy_weights.pt"
     torch.save(
         {
             "model_state_dict": model.state_dict(),
             "chunk_size": chunk_size,
-            "state_dim": 16,
+            "state_dim": 17,
             "action_dim": 16,
+            "num_parallel_robots": num_robots,
         },
         str(model_path),
     )
@@ -178,8 +256,9 @@ class G1ACTAutonomousRunner:
         self.device = torch.device(device)
         ckpt = torch.load(weights_path, map_location=self.device)
         self.chunk_size = ckpt.get("chunk_size", 50)
+        self.state_dim = ckpt.get("state_dim", 17)
         self.model = G1ActionChunkingTransformer(
-            state_dim=ckpt.get("state_dim", 16),
+            state_dim=self.state_dim,
             action_dim=ckpt.get("action_dim", 16),
             chunk_size=self.chunk_size,
         ).to(self.device)
@@ -188,16 +267,19 @@ class G1ACTAutonomousRunner:
         self.action_buffer: list[np.ndarray] = []
         self.buffer_idx = 0
 
-    def query_action(self, full_robot_q: np.ndarray) -> np.ndarray:
-        left_arm = full_robot_q[LEFT_ARM_INDICES]
-        right_arm = full_robot_q[RIGHT_ARM_INDICES]
+    def query_action(self, full_robot_q: np.ndarray, task_id: float = 0.0) -> np.ndarray:
+        left_arm = full_robot_q[LEFT_ARM_JOINTS]
+        right_arm = full_robot_q[RIGHT_ARM_JOINTS]
         left_gripper = 0.0
         right_gripper = 0.0
-        obs_16 = np.concatenate([left_arm, right_arm, [left_gripper, right_gripper]]).astype(np.float32)
+        if self.state_dim == 17:
+            obs = np.concatenate([left_arm, right_arm, [left_gripper, right_gripper, task_id]]).astype(np.float32)
+        else:
+            obs = np.concatenate([left_arm, right_arm, [left_gripper, right_gripper]]).astype(np.float32)
 
         if not self.action_buffer or self.buffer_idx >= len(self.action_buffer):
             with torch.no_grad():
-                st_t = torch.from_numpy(obs_16).unsqueeze(0).to(self.device)
+                st_t = torch.from_numpy(obs).unsqueeze(0).to(self.device)
                 pred_chunk = self.model(st_t).squeeze(0).cpu().numpy()
             self.action_buffer = [pred_chunk[i] for i in range(len(pred_chunk))]
             self.buffer_idx = 0
@@ -206,8 +288,8 @@ class G1ACTAutonomousRunner:
         self.buffer_idx += 1
 
         out_q29 = full_robot_q.copy()
-        out_q29[LEFT_ARM_INDICES] = act_16[:7]
-        out_q29[RIGHT_ARM_INDICES] = act_16[7:14]
+        out_q29[LEFT_ARM_JOINTS] = act_16[:7]
+        out_q29[RIGHT_ARM_JOINTS] = act_16[7:14]
         return out_q29
 
 
@@ -215,6 +297,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--train", action="store_true")
     parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--num-robots", type=int, default=4, help="Number of parallel robots to collect training data from")
+    parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--output-dir", type=str, default="models/g1_act")
     args = parser.parse_args()
 
@@ -232,4 +316,10 @@ if __name__ == "__main__":
     )
 
     if args.train:
-        train_act_model(str(parquet_file), output_dir=args.output_dir, epochs=args.epochs)
+        train_act_model(
+            str(parquet_file),
+            output_dir=args.output_dir,
+            epochs=args.epochs,
+            num_robots=args.num_robots,
+            batch_size=args.batch_size,
+        )

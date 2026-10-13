@@ -5,13 +5,20 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import mujoco
-from g1_constants import (
-    DEFAULT_KP, DEFAULT_KD, NOMINAL_STAND_Q, NUM_MOTORS, NUM_BODY_MOTORS,
+try:  # package and flat-script imports both work
+    from .g1_constants import (    OFFICIAL_KP, OFFICIAL_KD, NOMINAL_STAND_Q, NUM_BODY_MOTORS,
     L_SHOULDER_PITCH, L_WRIST_YAW, R_SHOULDER_PITCH, R_WRIST_YAW,
-    LEFT_ARM_INDICES, RIGHT_ARM_INDICES, LEG_JOINT_INDICES, WAIST_INDICES,
-    JOINT_LIMITS_MIN, JOINT_LIMITS_MAX
-)
-from g1_robot import G1Robot
+    LEFT_ARM_JOINTS, RIGHT_ARM_JOINTS, LEG_JOINTS, WAIST_JOINTS,
+    JOINT_LIMITS_MIN, JOINT_LIMITS_MAX)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_constants import (OFFICIAL_KP, OFFICIAL_KD, NOMINAL_STAND_Q, NUM_BODY_MOTORS,
+L_SHOULDER_PITCH, L_WRIST_YAW, R_SHOULDER_PITCH, R_WRIST_YAW,
+LEFT_ARM_JOINTS, RIGHT_ARM_JOINTS, LEG_JOINTS, WAIST_JOINTS,
+JOINT_LIMITS_MIN, JOINT_LIMITS_MAX)
+try:  # package and flat-script imports both work
+    from .g1_robot import (    G1Robot)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_robot import (G1Robot)
 
 
 class G1PhysicsEnv(gym.Env):
@@ -42,9 +49,9 @@ class G1PhysicsEnv(gym.Env):
         self.robot = G1Robot(fix_base=self.fix_base, num_motors=self.num_motors)
 
         if right_arm:
-            self.arm_indices = RIGHT_ARM_INDICES
+            self.arm_indices = RIGHT_ARM_JOINTS
         else:
-            self.arm_indices = LEFT_ARM_INDICES
+            self.arm_indices = LEFT_ARM_JOINTS
 
 
         self.action_space = spaces.Box(
@@ -68,9 +75,9 @@ class G1PhysicsEnv(gym.Env):
 
     def sample_reachable_goal(self) -> np.ndarray:
         side_sign = -1.0 if self.right_arm else 1.0
-        x = np.random.uniform(0.18, 0.42)
-        y = side_sign * np.random.uniform(0.08, 0.35)
-        z = np.random.uniform(0.7, 1.15)
+        x = self.np_random.uniform(0.18, 0.42)
+        y = side_sign * self.np_random.uniform(0.08, 0.35)
+        z = self.np_random.uniform(0.7, 1.15)
         return np.array([x, y, z], dtype=np.float32)
 
     def reset(
@@ -81,13 +88,13 @@ class G1PhysicsEnv(gym.Env):
         super().reset(seed=seed)
         self.step_count = 0
         self.target_q = NOMINAL_STAND_Q[:self.num_motors].copy()
-        self.target_q[self.arm_indices] += np.random.uniform(-0.05, 0.05, size=7)
+        self.target_q[self.arm_indices] += self.np_random.uniform(-0.05, 0.05, size=7)
         self.robot.reset(self.target_q)
 
         if self.target_type == 'random':
             self.goal_pos = self.sample_reachable_goal()
         elif self.target_type == 'circle':
-            angle = np.random.uniform(0, 2 * np.pi)
+            angle = self.np_random.uniform(0, 2 * np.pi)
             radius = 0.15
             center_x = 0.3
             center_y = -0.2 if self.right_arm else 0.2
@@ -138,7 +145,7 @@ class G1PhysicsEnv(gym.Env):
         )
 
 
-        idle_indices = LEFT_ARM_INDICES if self.right_arm else RIGHT_ARM_INDICES
+        idle_indices = LEFT_ARM_JOINTS if self.right_arm else RIGHT_ARM_JOINTS
         self.target_q[idle_indices] = NOMINAL_STAND_Q[idle_indices]
 
 
@@ -245,9 +252,9 @@ class G1LocomotionEnv(gym.Env):
 
 
         self.command = np.array([
-            np.random.uniform(-0.5, 1.0),
-            np.random.uniform(-0.3, 0.3),
-            np.random.uniform(-0.5, 0.5),
+            self.np_random.uniform(-0.5, 1.0),
+            self.np_random.uniform(-0.3, 0.3),
+            self.np_random.uniform(-0.5, 0.5),
         ], dtype=np.float32)
 
         mujoco.mj_forward(self.robot.model, self.robot.data)
@@ -265,8 +272,8 @@ class G1LocomotionEnv(gym.Env):
         from scipy.spatial.transform import Rotation as R
         gravity_body = R.from_quat([base_quat[1], base_quat[2], base_quat[3], base_quat[0]]).apply(gravity_world)
 
-        q = self.robot.get_joint_positions()[LEG_JOINT_INDICES]
-        dq = self.robot.get_joint_velocities()[LEG_JOINT_INDICES]
+        q = self.robot.get_joint_positions()[LEG_JOINTS]
+        dq = self.robot.get_joint_velocities()[LEG_JOINTS]
 
         return np.concatenate([
             base_linvel, base_angvel, gravity_body,
@@ -277,7 +284,7 @@ class G1LocomotionEnv(gym.Env):
         self.step_count += 1
 
 
-        self.target_q[LEG_JOINT_INDICES] = NOMINAL_STAND_Q[LEG_JOINT_INDICES] + action
+        self.target_q[LEG_JOINTS] = NOMINAL_STAND_Q[LEG_JOINTS] + action
         self.last_action = action.copy()
 
         for _ in range(self.decimation):
@@ -293,7 +300,7 @@ class G1LocomotionEnv(gym.Env):
 
         reward = -1.0 * (vx_err**2 + vy_err**2 + 0.5 * vyaw_err**2)
         reward -= 0.01 * np.sum(action**2)
-        reward -= 0.001 * np.sum((self.target_q[LEG_JOINT_INDICES] - NOMINAL_STAND_Q[LEG_JOINT_INDICES])**2)
+        reward -= 0.001 * np.sum((self.target_q[LEG_JOINTS] - NOMINAL_STAND_Q[LEG_JOINTS])**2)
 
 
         reward += 0.1

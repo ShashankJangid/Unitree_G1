@@ -1,6 +1,16 @@
 import numpy as np
-from g1_constants import NOMINAL_STAND_Q, NUM_BODY_MOTORS, TORQUE_LIMITS
-from g1_robot import G1Robot
+try:  # package and flat-script imports both work
+    from .g1_constants import (    NOMINAL_STAND_Q,
+    NUM_BODY_MOTORS,
+    TORQUE_LIMITS)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_constants import (NOMINAL_STAND_Q,
+NUM_BODY_MOTORS,
+TORQUE_LIMITS)
+try:  # package and flat-script imports both work
+    from .g1_robot import (    G1Robot)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_robot import (G1Robot)
 from run_simulation import G1CartesianController
 
 def run_physics_verification():

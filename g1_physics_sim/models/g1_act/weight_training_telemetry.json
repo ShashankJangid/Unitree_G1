@@ -1,0 +1,510 @@
+[
+  {
+    "epoch": 1,
+    "l1_loss": 0.27044,
+    "time_sec": 7.95,
+    "num_parallel_robots": 4,
+    "weights": {
+      "state_proj.weight": {
+        "norm": 9.2976,
+        "grad": 0.345343
+      },
+      "state_proj.bias": {
+        "norm": 2.2626,
+        "grad": 0.05503
+      },
+      "query_embed.weight": {
+        "norm": 112.2884,
+        "grad": 0.000427
+      },
+      "transformer_encoder.layers.0.self_attn.in_proj_weight": {
+        "norm": 19.6145,
+        "grad": 0.394222
+      },
+      "transformer_encoder.layers.0.self_attn.in_proj_bias": {
+        "norm": 0.0349,
+        "grad": 0.028775
+      },
+      "transformer_encoder.layers.0.self_attn.out_proj.weight": {
+        "norm": 9.2239,
+        "grad": 0.293406
+      },
+      "transformer_encoder.layers.0.self_attn.out_proj.bias": {
+        "norm": 0.0312,
+        "grad": 0.039398
+      },
+      "transformer_encoder.layers.0.linear1.weight": {
+        "norm": 13.0889,
+        "grad": 0.239513
+      },
+      "transformer_encoder.layers.0.linear1.bias": {
+        "norm": 0.8122,
+        "grad": 0.014243
+      },
+      "transformer_encoder.layers.0.linear2.weight": {
+        "norm": 9.278,
+        "grad": 0.17609
+      },
+      "transformer_encoder.layers.0.linear2.bias": {
+        "norm": 0.4001,
+        "grad": 0.020621
+      },
+      "transformer_encoder.layers.0.norm1.weight": {
+        "norm": 16.0076,
+        "grad": 0.029264
+      },
+      "transformer_encoder.layers.0.norm1.bias": {
+        "norm": 0.0148,
+        "grad": 0.028512
+      },
+      "transformer_encoder.layers.0.norm2.weight": {
+        "norm": 16.0053,
+        "grad": 0.020967
+      },
+      "transformer_encoder.layers.0.norm2.bias": {
+        "norm": 0.0131,
+        "grad": 0.019729
+      },
+      "transformer_encoder.layers.1.self_attn.in_proj_weight": {
+        "norm": 19.6123,
+        "grad": 0.186963
+      },
+      "transformer_encoder.layers.1.self_attn.in_proj_bias": {
+        "norm": 0.0154,
+        "grad": 0.010361
+      },
+      "transformer_encoder.layers.1.self_attn.out_proj.weight": {
+        "norm": 9.2151,
+        "grad": 0.146202
+      },
+      "transformer_encoder.layers.1.self_attn.out_proj.bias": {
+        "norm": 0.0133,
+        "grad": 0.014204
+      },
+      "transformer_encoder.layers.1.linear1.weight": {
+        "norm": 13.086,
+        "grad": 0.11951
+      },
+      "transformer_encoder.layers.1.linear1.bias": {
+        "norm": 0.8113,
+        "grad": 0.007216
+      },
+      "transformer_encoder.layers.1.linear2.weight": {
+        "norm": 9.2746,
+        "grad": 0.102263
+      },
+      "transformer_encoder.layers.1.linear2.bias": {
+        "norm": 0.3999,
+        "grad": 0.011001
+      },
+      "transformer_encoder.layers.1.norm1.weight": {
+        "norm": 16.004,
+        "grad": 0.016409
+      },
+      "transformer_encoder.layers.1.norm1.bias": {
+        "norm": 0.0127,
+        "grad": 0.014725
+      },
+      "transformer_encoder.layers.1.norm2.weight": {
+        "norm": 16.0026,
+        "grad": 0.012653
+      },
+      "transformer_encoder.layers.1.norm2.bias": {
+        "norm": 0.0119,
+        "grad": 0.011052
+      },
+      "transformer_encoder.layers.2.self_attn.in_proj_weight": {
+        "norm": 19.6091,
+        "grad": 0.104403
+      },
+      "transformer_encoder.layers.2.self_attn.in_proj_bias": {
+        "norm": 0.0134,
+        "grad": 0.00562
+      },
+      "transformer_encoder.layers.2.self_attn.out_proj.weight": {
+        "norm": 9.2103,
+        "grad": 0.094357
+      },
+      "transformer_encoder.layers.2.self_attn.out_proj.bias": {
+        "norm": 0.0124,
+        "grad": 0.008634
+      },
+      "transformer_encoder.layers.2.linear1.weight": {
+        "norm": 13.082,
+        "grad": 0.078635
+      },
+      "transformer_encoder.layers.2.linear1.bias": {
+        "norm": 0.8111,
+        "grad": 0.004747
+      },
+      "transformer_encoder.layers.2.linear2.weight": {
+        "norm": 9.2693,
+        "grad": 0.078226
+      },
+      "transformer_encoder.layers.2.linear2.bias": {
+        "norm": 0.3991,
+        "grad": 0.008071
+      },
+      "transformer_encoder.layers.2.norm1.weight": {
+        "norm": 16.001,
+        "grad": 0.011406
+      },
+      "transformer_encoder.layers.2.norm1.bias": {
+        "norm": 0.0133,
+        "grad": 0.009936
+      },
+      "transformer_encoder.layers.2.norm2.weight": {
+        "norm": 16.0001,
+        "grad": 0.009469
+      },
+      "transformer_encoder.layers.2.norm2.bias": {
+        "norm": 0.0139,
+        "grad": 0.008503
+      },
+      "transformer_encoder.layers.3.self_attn.in_proj_weight": {
+        "norm": 19.6065,
+        "grad": 0.085044
+      },
+      "transformer_encoder.layers.3.self_attn.in_proj_bias": {
+        "norm": 0.0141,
+        "grad": 0.004686
+      },
+      "transformer_encoder.layers.3.self_attn.out_proj.weight": {
+        "norm": 9.2073,
+        "grad": 0.085033
+      },
+      "transformer_encoder.layers.3.self_attn.out_proj.bias": {
+        "norm": 0.0141,
+        "grad": 0.007199
+      },
+      "transformer_encoder.layers.3.linear1.weight": {
+        "norm": 13.0785,
+        "grad": 0.0704
+      },
+      "transformer_encoder.layers.3.linear1.bias": {
+        "norm": 0.8116,
+        "grad": 0.004257
+      },
+      "transformer_encoder.layers.3.linear2.weight": {
+        "norm": 9.2649,
+        "grad": 0.083317
+      },
+      "transformer_encoder.layers.3.linear2.bias": {
+        "norm": 0.3991,
+        "grad": 0.007944
+      },
+      "transformer_encoder.layers.3.norm1.weight": {
+        "norm": 15.9999,
+        "grad": 0.009927
+      },
+      "transformer_encoder.layers.3.norm1.bias": {
+        "norm": 0.0168,
+        "grad": 0.00895
+      },
+      "transformer_encoder.layers.3.norm2.weight": {
+        "norm": 15.9908,
+        "grad": 0.009724
+      },
+      "transformer_encoder.layers.3.norm2.bias": {
+        "norm": 0.0149,
+        "grad": 0.009128
+      },
+      "transformer_decoder.layers.0.self_attn.in_proj_weight": {
+        "norm": 19.6954,
+        "grad": 0.002934
+      },
+      "transformer_decoder.layers.0.self_attn.in_proj_bias": {
+        "norm": 0.0308,
+        "grad": 0.001262
+      },
+      "transformer_decoder.layers.0.self_attn.out_proj.weight": {
+        "norm": 9.2397,
+        "grad": 0.004033
+      },
+      "transformer_decoder.layers.0.self_attn.out_proj.bias": {
+        "norm": 0.0201,
+        "grad": 0.002118
+      },
+      "transformer_decoder.layers.0.multihead_attn.in_proj_weight": {
+        "norm": 19.612,
+        "grad": 0.026389
+      },
+      "transformer_decoder.layers.0.multihead_attn.in_proj_bias": {
+        "norm": 0.0214,
+        "grad": 0.00145
+      },
+      "transformer_decoder.layers.0.multihead_attn.out_proj.weight": {
+        "norm": 9.2461,
+        "grad": 0.033396
+      },
+      "transformer_decoder.layers.0.multihead_attn.out_proj.bias": {
+        "norm": 0.0189,
+        "grad": 0.002099
+      },
+      "transformer_decoder.layers.0.linear1.weight": {
+        "norm": 13.0656,
+        "grad": 0.009082
+      },
+      "transformer_decoder.layers.0.linear1.bias": {
+        "norm": 0.7966,
+        "grad": 0.000845
+      },
+      "transformer_decoder.layers.0.linear2.weight": {
+        "norm": 9.2626,
+        "grad": 0.019631
+      },
+      "transformer_decoder.layers.0.linear2.bias": {
+        "norm": 0.3936,
+        "grad": 0.002387
+      },
+      "transformer_decoder.layers.0.norm1.weight": {
+        "norm": 15.9608,
+        "grad": 0.000382
+      },
+      "transformer_decoder.layers.0.norm1.bias": {
+        "norm": 0.0196,
+        "grad": 0.0021
+      },
+      "transformer_decoder.layers.0.norm2.weight": {
+        "norm": 15.997,
+        "grad": 0.0016
+      },
+      "transformer_decoder.layers.0.norm2.bias": {
+        "norm": 0.0203,
+        "grad": 0.00259
+      },
+      "transformer_decoder.layers.0.norm3.weight": {
+        "norm": 15.9952,
+        "grad": 0.001965
+      },
+      "transformer_decoder.layers.0.norm3.bias": {
+        "norm": 0.02,
+        "grad": 0.002734
+      },
+      "transformer_decoder.layers.1.self_attn.in_proj_weight": {
+        "norm": 19.6284,
+        "grad": 0.015278
+      },
+      "transformer_decoder.layers.1.self_attn.in_proj_bias": {
+        "norm": 0.0246,
+        "grad": 0.001239
+      },
+      "transformer_decoder.layers.1.self_attn.out_proj.weight": {
+        "norm": 9.2351,
+        "grad": 0.022696
+      },
+      "transformer_decoder.layers.1.self_attn.out_proj.bias": {
+        "norm": 0.0183,
+        "grad": 0.002088
+      },
+      "transformer_decoder.layers.1.multihead_attn.in_proj_weight": {
+        "norm": 19.608,
+        "grad": 0.031522
+      },
+      "transformer_decoder.layers.1.multihead_attn.in_proj_bias": {
+        "norm": 0.0167,
+        "grad": 0.001748
+      },
+      "transformer_decoder.layers.1.multihead_attn.out_proj.weight": {
+        "norm": 9.2388,
+        "grad": 0.041199
+      },
+      "transformer_decoder.layers.1.multihead_attn.out_proj.bias": {
+        "norm": 0.0158,
+        "grad": 0.002671
+      },
+      "transformer_decoder.layers.1.linear1.weight": {
+        "norm": 13.0544,
+        "grad": 0.023748
+      },
+      "transformer_decoder.layers.1.linear1.bias": {
+        "norm": 0.7963,
+        "grad": 0.00148
+      },
+      "transformer_decoder.layers.1.linear2.weight": {
+        "norm": 9.2591,
+        "grad": 0.041439
+      },
+      "transformer_decoder.layers.1.linear2.bias": {
+        "norm": 0.3934,
+        "grad": 0.003562
+      },
+      "transformer_decoder.layers.1.norm1.weight": {
+        "norm": 15.9836,
+        "grad": 0.002277
+      },
+      "transformer_decoder.layers.1.norm1.bias": {
+        "norm": 0.0177,
+        "grad": 0.002675
+      },
+      "transformer_decoder.layers.1.norm2.weight": {
+        "norm": 15.9952,
+        "grad": 0.003809
+      },
+      "transformer_decoder.layers.1.norm2.bias": {
+        "norm": 0.0189,
+        "grad": 0.003967
+      },
+      "transformer_decoder.layers.1.norm3.weight": {
+        "norm": 15.9933,
+        "grad": 0.004612
+      },
+      "transformer_decoder.layers.1.norm3.bias": {
+        "norm": 0.0196,
+        "grad": 0.004594
+      },
+      "transformer_decoder.layers.2.self_attn.in_proj_weight": {
+        "norm": 19.6096,
+        "grad": 0.036954
+      },
+      "transformer_decoder.layers.2.self_attn.in_proj_bias": {
+        "norm": 0.0195,
+        "grad": 0.002117
+      },
+      "transformer_decoder.layers.2.self_attn.out_proj.weight": {
+        "norm": 9.2265,
+        "grad": 0.051913
+      },
+      "transformer_decoder.layers.2.self_attn.out_proj.bias": {
+        "norm": 0.0172,
+        "grad": 0.00368
+      },
+      "transformer_decoder.layers.2.multihead_attn.in_proj_weight": {
+        "norm": 19.5999,
+        "grad": 0.058545
+      },
+      "transformer_decoder.layers.2.multihead_attn.in_proj_bias": {
+        "norm": 0.0153,
+        "grad": 0.003144
+      },
+      "transformer_decoder.layers.2.multihead_attn.out_proj.weight": {
+        "norm": 9.2254,
+        "grad": 0.079284
+      },
+      "transformer_decoder.layers.2.multihead_attn.out_proj.bias": {
+        "norm": 0.0162,
+        "grad": 0.005161
+      },
+      "transformer_decoder.layers.2.linear1.weight": {
+        "norm": 13.053,
+        "grad": 0.052504
+      },
+      "transformer_decoder.layers.2.linear1.bias": {
+        "norm": 0.7951,
+        "grad": 0.003113
+      },
+      "transformer_decoder.layers.2.linear2.weight": {
+        "norm": 9.2597,
+        "grad": 0.086011
+      },
+      "transformer_decoder.layers.2.linear2.bias": {
+        "norm": 0.3933,
+        "grad": 0.007158
+      },
+      "transformer_decoder.layers.2.norm1.weight": {
+        "norm": 15.9929,
+        "grad": 0.005529
+      },
+      "transformer_decoder.layers.2.norm1.bias": {
+        "norm": 0.0232,
+        "grad": 0.005193
+      },
+      "transformer_decoder.layers.2.norm2.weight": {
+        "norm": 15.9931,
+        "grad": 0.00839
+      },
+      "transformer_decoder.layers.2.norm2.bias": {
+        "norm": 0.0248,
+        "grad": 0.007747
+      },
+      "transformer_decoder.layers.2.norm3.weight": {
+        "norm": 15.9905,
+        "grad": 0.010583
+      },
+      "transformer_decoder.layers.2.norm3.bias": {
+        "norm": 0.0274,
+        "grad": 0.009422
+      },
+      "transformer_decoder.layers.3.self_attn.in_proj_weight": {
+        "norm": 19.6019,
+        "grad": 0.091658
+      },
+      "transformer_decoder.layers.3.self_attn.in_proj_bias": {
+        "norm": 0.0202,
+        "grad": 0.004851
+      },
+      "transformer_decoder.layers.3.self_attn.out_proj.weight": {
+        "norm": 9.2173,
+        "grad": 0.118667
+      },
+      "transformer_decoder.layers.3.self_attn.out_proj.bias": {
+        "norm": 0.0199,
+        "grad": 0.008506
+      },
+      "transformer_decoder.layers.3.multihead_attn.in_proj_weight": {
+        "norm": 19.5832,
+        "grad": 0.126445
+      },
+      "transformer_decoder.layers.3.multihead_attn.in_proj_bias": {
+        "norm": 0.0177,
+        "grad": 0.006445
+      },
+      "transformer_decoder.layers.3.multihead_attn.out_proj.weight": {
+        "norm": 9.2009,
+        "grad": 0.170719
+      },
+      "transformer_decoder.layers.3.multihead_attn.out_proj.bias": {
+        "norm": 0.0206,
+        "grad": 0.011585
+      },
+      "transformer_decoder.layers.3.linear1.weight": {
+        "norm": 13.0478,
+        "grad": 0.127086
+      },
+      "transformer_decoder.layers.3.linear1.bias": {
+        "norm": 0.7936,
+        "grad": 0.007582
+      },
+      "transformer_decoder.layers.3.linear2.weight": {
+        "norm": 9.2621,
+        "grad": 0.182353
+      },
+      "transformer_decoder.layers.3.linear2.bias": {
+        "norm": 0.3929,
+        "grad": 0.017089
+      },
+      "transformer_decoder.layers.3.norm1.weight": {
+        "norm": 16.0006,
+        "grad": 0.014327
+      },
+      "transformer_decoder.layers.3.norm1.bias": {
+        "norm": 0.0405,
+        "grad": 0.011705
+      },
+      "transformer_decoder.layers.3.norm2.weight": {
+        "norm": 15.9877,
+        "grad": 0.020519
+      },
+      "transformer_decoder.layers.3.norm2.bias": {
+        "norm": 0.0424,
+        "grad": 0.016762
+      },
+      "transformer_decoder.layers.3.norm3.weight": {
+        "norm": 15.9326,
+        "grad": 0.028664
+      },
+      "transformer_decoder.layers.3.norm3.bias": {
+        "norm": 0.0081,
+        "grad": 0.02215
+      },
+      "action_head.weight": {
+        "norm": 2.2429,
+        "grad": 0.732256
+      },
+      "action_head.bias": {
+        "norm": 0.1563,
+        "grad": 0.038084
+      }
+    }
+  }
+]

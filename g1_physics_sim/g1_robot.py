@@ -3,59 +3,91 @@ import pathlib
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 import mujoco
-from g1_constants import (
-    DEFAULT_KD, DEFAULT_KP, JOINT_NAMES_29DOF, JOINT_NAMES_43DOF,
-    NOMINAL_STAND_Q, ZERO_POSE_Q, NUM_MOTORS, NUM_BODY_MOTORS, TORQUE_LIMITS,
-    L_WRIST_YAW, R_WRIST_YAW, ARM_SDK_ENABLE, LEG_JOINT_INDICES,
-    LEFT_ARM_INDICES, RIGHT_ARM_INDICES, WAIST_INDICES,
-    JOINT_LIMITS_MIN, JOINT_LIMITS_MAX, ELASTIC_BAND_STIFFNESS, ELASTIC_BAND_DAMPING
-)
+try:  # package and flat-script imports both work
+    from .g1_constants import (    OFFICIAL_KD, OFFICIAL_KP, JOINT_NAMES_29DOF,
+    NOMINAL_STAND_Q, ZERO_POSE_Q, NUM_BODY_MOTORS, TORQUE_LIMITS,
+    L_WRIST_YAW, R_WRIST_YAW, ARM_SDK_ENABLE, LEG_JOINTS,
+    LEFT_ARM_JOINTS, RIGHT_ARM_JOINTS, WAIST_JOINTS,
+    JOINT_LIMITS_MIN, JOINT_LIMITS_MAX,
+    ELASTIC_BAND_HEIGHT, MODE_PR, MODE_AB,
+    SELF_COLLISION_DIST, PHYSICS_DT)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_constants import (OFFICIAL_KD, OFFICIAL_KP, JOINT_NAMES_29DOF,
+NOMINAL_STAND_Q, ZERO_POSE_Q, NUM_BODY_MOTORS, TORQUE_LIMITS,
+L_WRIST_YAW, R_WRIST_YAW, ARM_SDK_ENABLE, LEG_JOINTS,
+LEFT_ARM_JOINTS, RIGHT_ARM_JOINTS, WAIST_JOINTS,
+JOINT_LIMITS_MIN, JOINT_LIMITS_MAX,
+ELASTIC_BAND_HEIGHT, MODE_PR, MODE_AB,
+SELF_COLLISION_DIST, PHYSICS_DT)
+
+DEFAULT_SCENE = 'models/g1/g1_physics_scene.xml'
+DEFAULT_SCENE_WITH_HAND = 'models/g1/scene_29dof_with_hand.xml'
+
 
 class G1Robot:
+    """
+    MuJoCo model of the G1 29-DOF body.
+
+    The body is always exactly 29 actuators. Dexterous hands are modelled by a
+    separate XML if present, but they are NOT appended to the 0..28 body index
+    space - that index space is defined by the real robot's LowCmd_ layout and
+    must never be renumbered.
+    """
 
     def __init__(
         self,
         xml_path: Optional[str] = None,
         fix_base: bool = False,
         num_motors: int = NUM_BODY_MOTORS,
-        enable_elastic_band: bool = True,
-        elastic_band_height: float = 0.793
+        enable_elastic_band: bool = False,
+        elastic_band_height: float = ELASTIC_BAND_HEIGHT,
+        with_hands: bool = False,
     ):
-        self.num_motors = num_motors
+        if num_motors != NUM_BODY_MOTORS:
+            raise ValueError(
+                f'G1 body is exactly {NUM_BODY_MOTORS} motors, got {num_motors}. '
+                'Hands are controlled separately, not appended to the body array.'
+            )
+        self.num_motors = NUM_BODY_MOTORS
+        self.with_hands = with_hands
         self.fix_base = fix_base
         self.enable_elastic_band = enable_elastic_band
         self.elastic_band_height = elastic_band_height
         self.elastic_band_active = enable_elastic_band
+        self.mode_pr = MODE_PR
 
+        base = pathlib.Path(__file__).resolve().parent
         if xml_path is None:
-            if num_motors == NUM_MOTORS:
-                xml_path = str(
-                    pathlib.Path(__file__).resolve().parent / 'models' / 'g1' / 'scene_29dof_with_hand.xml'
-                )
-            else:
-                xml_path = str(
-                    pathlib.Path(__file__).resolve().parent / 'models' / 'g1' / 'g1_physics_scene.xml'
-                )
+            xml_path = str(base / (DEFAULT_SCENE_WITH_HAND if with_hands else DEFAULT_SCENE))
 
         self.model = mujoco.MjModel.from_xml_path(xml_path)
         self.data = mujoco.MjData(self.model)
-        self.model.opt.timestep = 0.002
+        self.model.opt.timestep = PHYSICS_DT  # 500 Hz
 
         self._qpos_adr = np.zeros(self.num_motors, dtype=np.int32)
         self._dof_adr = np.zeros(self.num_motors, dtype=np.int32)
         self._actuator_id = np.zeros(self.num_motors, dtype=np.int32)
 
-        joint_names = JOINT_NAMES_43DOF if num_motors == NUM_MOTORS else JOINT_NAMES_29DOF
-
-        for i, name in enumerate(joint_names):
+        for i, name in enumerate(JOINT_NAMES_29DOF):
             jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)
             if jid == -1:
-                raise RuntimeError(f"Joint '{name}' not found in MuJoCo model!")
-            self._qpos_adr[i] = self.model.jnt_qposadr[jid]
-            self._dof_adr[i] = self.model.jnt_dofadr[jid]
-            act_name = name.replace('_joint', '')
-            aid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, act_name)
+                raise RuntimeError(f"Joint '{name}' not found in MuJoCo model at {xml_path}")
+            self._qpos_adr[i] = int(self.model.jnt_qposadr[jid])
+            self._dof_adr[i] = int(self.model.jnt_dofadr[jid])
+            aid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, name.replace('_joint', ''))
             self._actuator_id[i] = aid
+
+        # Read limits straight from the model - never hand-typed.
+        self._q_min = np.zeros(self.num_motors, dtype=np.float32)
+        self._q_max = np.zeros(self.num_motors, dtype=np.float32)
+        for i, name in enumerate(JOINT_NAMES_29DOF):
+            jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)
+            if self.model.jnt_limited[jid]:
+                self._q_min[i] = float(self.model.jnt_range[jid][0])
+                self._q_max[i] = float(self.model.jnt_range[jid][1])
+            else:
+                self._q_min[i] = -np.pi
+                self._q_max[i] = np.pi
 
         self.left_hand_bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'left_wrist_yaw_link')
         self.right_hand_bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'right_wrist_yaw_link')
@@ -68,33 +100,49 @@ class G1Robot:
         self.left_shoulder_bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'left_shoulder_pitch_link')
         self.right_shoulder_bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'right_shoulder_pitch_link')
 
-        self.kp = DEFAULT_KP[:self.num_motors].copy()
-        self.kd = DEFAULT_KD[:self.num_motors].copy()
+        self.kp = OFFICIAL_KP[:self.num_motors].copy()
+        self.kd = OFFICIAL_KD[:self.num_motors].copy()
+        for idx in LEFT_ARM_JOINTS + RIGHT_ARM_JOINTS:
+            self.kp[idx] = 120.0
+            self.kd[idx] = 3.0
 
         self.foot_gids = set()
+        self.floor_gid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, 'ground_floor')
+        if self.floor_gid == -1:
+            self.floor_gid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, 'floor')
+        self.floor_original_matid = int(self.model.geom_matid[self.floor_gid]) if self.floor_gid != -1 else -1
+        self.is_partition_plane = True
         for gid in range(self.model.ngeom):
             gname = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, gid)
             if gname and ('ankle' in gname or 'foot' in gname):
                 self.foot_gids.add(gid)
 
-        self._elastic_band_gid = -1
+        self._elastic_band_eqid = -1
         if self.enable_elastic_band:
             self._setup_elastic_band()
 
         self.reset()
 
-    def _setup_elastic_band(self):
-        """Create a virtual elastic band constraint to suspend the robot."""
-        try:
-            for eq_id in range(self.model.neq):
-                eq_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_EQUALITY, eq_id)
-                if eq_name and 'elastic' in eq_name.lower():
-                    self._elastic_band_eqid = eq_id
-                    return
+    def _setup_elastic_band(self) -> None:
+        """Locate a pre-built elastic-band equality constraint in the MJCF."""
+        self._elastic_band_eqid = -1
+        for eq_id in range(self.model.neq):
+            eq_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_EQUALITY, eq_id)
+            if eq_name and 'elastic' in eq_name.lower():
+                self._elastic_band_eqid = eq_id
+                return
+        if self.enable_elastic_band:
+            print('[G1Robot] No elastic-band equality constraint in scene; '
+                  'free-standing will collapse without a balance controller.')
 
-            self._elastic_band_eqid = -1
-        except Exception:
-            self._elastic_band_eqid = -1
+    def set_mode_pr(self, use_pr: bool) -> None:
+        """
+        Ankle/waist actuation mode.
+        PR (0) = series pitch/roll layout, AB (1) = parallel A/B layout.
+        The underlying MuJoCo joints are identical; the flag only documents the
+        intended interpretation to match LowCmd_.mode_pr.
+        """
+        self.mode_pr = MODE_PR if use_pr else MODE_AB
 
     def toggle_elastic_band(self, active: Optional[bool] = None) -> bool:
         """Toggle or set the elastic band state."""
@@ -133,7 +181,13 @@ class G1Robot:
         return np.array([self.data.qvel[adr] for adr in self._dof_adr], dtype=np.float32)
 
     def get_joint_torques(self) -> np.ndarray:
-        return np.array([self.data.actuator_force[aid] for aid in self._actuator_id if aid != -1], dtype=np.float32)
+        """Applied actuator force per body motor (always length 29)."""
+        out = np.zeros(self.num_motors, dtype=np.float32)
+        for i in range(self.num_motors):
+            aid = self._actuator_id[i]
+            if aid != -1:
+                out[i] = self.data.actuator_force[aid]
+        return out
 
     def get_hand_pos(self, right_arm: bool = False) -> np.ndarray:
         bid = self.right_hand_bid if right_arm else self.left_hand_bid
@@ -185,12 +239,28 @@ class G1Robot:
         if self.target_mid != -1:
             self.data.mocap_pos[self.target_mid] = pos
 
+    def set_plane_type(self, partition: bool):
+        if self.floor_gid == -1:
+            return
+        self.is_partition_plane = partition
+        if partition:
+            self.model.geom_matid[self.floor_gid] = self.floor_original_matid
+            self.model.geom_rgba[self.floor_gid] = [0.5, 0.5, 0.5, 1.0]
+        else:
+            self.model.geom_matid[self.floor_gid] = -1
+            self.model.geom_rgba[self.floor_gid] = [0.28, 0.30, 0.34, 1.0]
+
+    def toggle_plane_type(self) -> bool:
+        self.set_plane_type(not self.is_partition_plane)
+        return self.is_partition_plane
+
     def compute_pd_torques(
         self,
         q_des: np.ndarray,
         dq_des: Optional[np.ndarray] = None,
         tau_ff: Optional[np.ndarray] = None
     ) -> np.ndarray:
+        q_des = self.clamp_to_limits(np.asarray(q_des, dtype=np.float32)[:self.num_motors])
         q_act = self.get_joint_positions()
         dq_act = self.get_joint_velocities()
 
@@ -199,9 +269,10 @@ class G1Robot:
         if tau_ff is None:
             tau_ff = np.zeros(self.num_motors, dtype=np.float32)
 
-        torques = self.kp * (q_des - q_act) + self.kd * (dq_des - dq_act) + tau_ff
-        torques = np.clip(torques, -TORQUE_LIMITS[:self.num_motors], TORQUE_LIMITS[:self.num_motors])
-        return torques
+        tau_ff = np.clip(np.asarray(tau_ff, dtype=np.float32)[:self.num_motors],
+                         -TORQUE_LIMITS[:self.num_motors], TORQUE_LIMITS[:self.num_motors])
+        torques = self.kp * (q_des - q_act) + self.kd * (dq_des[:self.num_motors] - dq_act) + tau_ff
+        return np.clip(torques, -TORQUE_LIMITS[:self.num_motors], TORQUE_LIMITS[:self.num_motors])
 
     def step_physics(
         self,
@@ -233,37 +304,41 @@ class G1Robot:
             self.kd[:len(kd)] = kd
         return self.step_physics(q_des)
 
-    def check_self_collision(self, threshold: float = -0.002) -> Tuple[bool, float]:
+    def check_self_collision(self, threshold: float = SELF_COLLISION_DIST) -> Tuple[bool, float]:
         max_penetration = 0.0
         has_collision = False
         for i in range(self.data.ncon):
-            contact = self.data.contact[i]
-            if contact.dist < threshold:
+            if self.data.contact[i].dist < threshold:
                 has_collision = True
-                max_penetration = max(max_penetration, -contact.dist)
+                max_penetration = max(max_penetration, -float(self.data.contact[i].dist))
         return has_collision, max_penetration
 
     def get_joint_limits(self) -> Tuple[np.ndarray, np.ndarray]:
-        return JOINT_LIMITS_MIN[:self.num_motors].copy(), JOINT_LIMITS_MAX[:self.num_motors].copy()
+        """Limits read from the MJCF at construction time."""
+        return self._q_min.copy(), self._q_max.copy()
 
     def clamp_to_limits(self, q: np.ndarray, margin: float = 0.03) -> np.ndarray:
-        q_min, q_max = self.get_joint_limits()
-        return np.clip(q, q_min + margin, q_max - margin)
+        q = np.asarray(q, dtype=np.float32)
+        lo = self._q_min + margin
+        hi = self._q_max - margin
+        # Guard against inverted ranges if margin exceeds a joint's travel.
+        hi = np.maximum(hi, lo)
+        return np.clip(q, lo, hi)
 
     def get_leg_state(self) -> Tuple[np.ndarray, np.ndarray]:
-        q = self.get_joint_positions()[LEG_JOINT_INDICES]
-        dq = self.get_joint_velocities()[LEG_JOINT_INDICES]
+        q = self.get_joint_positions()[LEG_JOINTS]
+        dq = self.get_joint_velocities()[LEG_JOINTS]
         return q, dq
 
     def get_arm_state(self, right_arm: bool = False) -> Tuple[np.ndarray, np.ndarray]:
-        indices = RIGHT_ARM_INDICES if right_arm else LEFT_ARM_INDICES
+        indices = RIGHT_ARM_JOINTS if right_arm else LEFT_ARM_JOINTS
         q = self.get_joint_positions()[indices]
         dq = self.get_joint_velocities()[indices]
         return q, dq
 
     def get_waist_state(self) -> Tuple[np.ndarray, np.ndarray]:
-        q = self.get_joint_positions()[WAIST_INDICES]
-        dq = self.get_joint_velocities()[WAIST_INDICES]
+        q = self.get_joint_positions()[WAIST_JOINTS]
+        dq = self.get_joint_velocities()[WAIST_JOINTS]
         return q, dq
 
     def set_motor_modes(self, modes: np.ndarray):

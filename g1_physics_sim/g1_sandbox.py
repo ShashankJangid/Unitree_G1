@@ -39,18 +39,17 @@ base_dir = pathlib.Path(__file__).resolve().parent
 if str(base_dir) not in sys.path:
     sys.path.insert(0, str(base_dir))
 
-from g1_constants import (
-    DEFAULT_KP,
-    DEFAULT_KD,
+try:  # package and flat-script imports both work
+    from .g1_constants import (    OFFICIAL_KP,
+    OFFICIAL_KD,
     NOMINAL_STAND_Q,
     ZERO_POSE_Q,
     NUM_BODY_MOTORS,
-    NUM_MOTORS,
     JOINT_NAMES_29DOF,
-    LEFT_ARM_INDICES,
-    RIGHT_ARM_INDICES,
-    WAIST_INDICES,
-    LEG_JOINT_INDICES,
+    LEFT_ARM_JOINTS,
+    RIGHT_ARM_JOINTS,
+    WAIST_JOINTS,
+    LEG_JOINTS,
     L_SHOULDER_PITCH,
     L_ELBOW,
     L_WRIST_ROLL,
@@ -60,27 +59,85 @@ from g1_constants import (
     WAIST_YAW,
     WAIST_ROLL,
     WAIST_PITCH,
-    L_LEG_HIP_PITCH,
-    L_LEG_HIP_ROLL,
-    L_LEG_HIP_YAW,
-    L_LEG_KNEE,
-    L_LEG_ANKLE_PITCH,
-    L_LEG_ANKLE_ROLL,
-    R_LEG_HIP_PITCH,
-    R_LEG_HIP_ROLL,
-    R_LEG_HIP_YAW,
-    R_LEG_KNEE,
-    R_LEG_ANKLE_PITCH,
-    R_LEG_ANKLE_ROLL,
-    ARM_SDK_WEIGHT_INDEX,
-)
-from g1_robot import G1Robot
-from g1_hardware_bridge import create_g1_bridge, G1RealHardwareBridge
-from g1_trajectory_manager import TrajectoryRecorder, TrajectoryPlayer, G1MovementScripts
-from g1_safety import G1FullSafetyManager, SafetyState
+    L_HIP_PITCH,
+    L_HIP_ROLL,
+    L_HIP_YAW,
+    L_KNEE,
+    L_ANKLE_PITCH,
+    L_ANKLE_ROLL,
+    R_HIP_PITCH,
+    R_HIP_ROLL,
+    R_HIP_YAW,
+    R_KNEE,
+    R_ANKLE_PITCH,
+    R_ANKLE_ROLL)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_constants import (OFFICIAL_KP,
+OFFICIAL_KD,
+NOMINAL_STAND_Q,
+ZERO_POSE_Q,
+NUM_BODY_MOTORS,
+JOINT_NAMES_29DOF,
+LEFT_ARM_JOINTS,
+RIGHT_ARM_JOINTS,
+WAIST_JOINTS,
+LEG_JOINTS,
+L_SHOULDER_PITCH,
+L_ELBOW,
+L_WRIST_ROLL,
+R_SHOULDER_PITCH,
+R_ELBOW,
+R_WRIST_ROLL,
+WAIST_YAW,
+WAIST_ROLL,
+WAIST_PITCH,
+L_HIP_PITCH,
+L_HIP_ROLL,
+L_HIP_YAW,
+L_KNEE,
+L_ANKLE_PITCH,
+L_ANKLE_ROLL,
+R_HIP_PITCH,
+R_HIP_ROLL,
+R_HIP_YAW,
+R_KNEE,
+R_ANKLE_PITCH,
+R_ANKLE_ROLL)
+try:  # package and flat-script imports both work
+    from .g1_robot import (    G1Robot)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_robot import (G1Robot)
+try:  # package and flat-script imports both work
+    from .g1_hardware_bridge import (    create_g1_bridge,
+    G1RealHardwareBridge)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_hardware_bridge import (create_g1_bridge,
+G1RealHardwareBridge)
+try:  # package and flat-script imports both work
+    from .g1_trajectory_manager import (    TrajectoryRecorder,
+    TrajectoryPlayer,
+    G1MovementScripts)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_trajectory_manager import (TrajectoryRecorder,
+TrajectoryPlayer,
+G1MovementScripts)
+try:  # package and flat-script imports both work
+    from .g1_safety import (    G1FullSafetyManager,
+    SafetyState)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_safety import (G1FullSafetyManager,
+SafetyState)
 from run_simulation import G1CartesianController
-from g1_state import G1State, G1Action
-from g1_lerobot_bridge import export_to_unitree_lerobot
+try:  # package and flat-script imports both work
+    from .g1_state import (    G1State,
+    G1Action)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_state import (G1State,
+G1Action)
+try:  # package and flat-script imports both work
+    from .g1_lerobot_bridge import (    export_to_unitree_lerobot)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_lerobot_bridge import (export_to_unitree_lerobot)
 
 
 def create_punch_script(duration: float = 3.0, fps: int = 50) -> Dict[str, Any]:
@@ -182,6 +239,7 @@ def print_sandbox_help():
 |                                                                                      |
 |  [PHYSICS & PERTURBATION]                                                            |
 |    'F'           : Apply Physical Push Force to Torso (Test Balance & Compliance)    |
+|    'G'           : Change Ground Plane (Toggle Partition Checkerboard / Normal Plane)|
 |                                                                                      |
 |  [RECORDING, PLAYBACK & HARDWARE]                                                    |
 |    'M'           : Toggle 50 Hz Motion Recording (Saves JSON + LeRobot data.json)    |
@@ -206,31 +264,14 @@ def simulate_g1(
     loop: bool = False,
     duration: float = 0.0,
     headless: bool = False,
+    normal_plane: bool = False,
 ) -> Dict[str, Any]:
-    """Master Unitree G1 Simulation & Control Function.
-
-    Args:
-        mode: Execution mode ('interactive', 'playback', 'script', 'headless', 'hardware').
-        script: Gesture script to execute ('wave', 'circle', 'square', 'squat', 'punch', 'bow', 'ankle_swing').
-        trajectory_file: Optional JSON trajectory to replay.
-        callback: Custom Python function `fn(robot, controller, step)` called every step.
-        right_arm: Start controlling right arm instead of left.
-        free_standing: True for dynamic ground balance, False for gantry harness.
-        hardware: True to stream commands to physical G1 EDU over DDS with official weight ramp.
-        iface: Network interface for DDS (default 'Ethernet').
-        record: Optional filename to record session to.
-        loop: Loop trajectory playback continuously.
-        duration: Run duration in seconds (0.0 = infinite until closed).
-        headless: True to run without opening MuJoCo 3D graphical viewer (useful for batch / RL / CI).
-
-    Returns:
-        Summary dictionary of the simulation session.
-    """
     print("=" * 72)
     print("         UNITREE G1 EDU – FULL-WORKING PHYSICS SANDBOX ENGINE")
     print("=" * 72)
     print(f" Mode:           {mode.upper()}")
     print(f" Base Support:   {'FREE-STANDING (Ground Balance)' if free_standing else 'GANTRY HARNESS (Suspended Safe)'}")
+    print(f" Ground Plane:   {'NORMAL PLANE (Solid)' if normal_plane else 'PARTITION PLANE (Checkerboard)'}")
     print(f" Hardware DDS:   {'ACTIVE (Physical Robot)' if hardware else 'SIMULATION ONLY'}")
     print(f" Active Arm:     {'RIGHT ARM' if right_arm else 'LEFT ARM'}")
     if script:
@@ -239,6 +280,8 @@ def simulate_g1(
 
 
     robot = G1Robot(fix_base=not free_standing, num_motors=NUM_BODY_MOTORS)
+    if normal_plane:
+        robot.set_plane_type(partition=False)
     controller = G1CartesianController(robot, right_arm=right_arm)
     bridge = create_g1_bridge(mode="hardware" if hardware else "sim", iface=iface, robot=robot)
     recorder = TrajectoryRecorder()
@@ -430,9 +473,9 @@ def simulate_g1(
                 squat_elevation = min(0.85, squat_elevation + 0.02)
                 robot.data.qpos[2] = squat_elevation
             elif active_mode == "LEFT_LEG":
-                controller.target_q[L_LEG_HIP_PITCH] = np.clip(controller.target_q[L_LEG_HIP_PITCH] + 0.05, -1.0, 1.0)
+                controller.target_q[L_HIP_PITCH] = np.clip(controller.target_q[L_HIP_PITCH] + 0.05, -1.0, 1.0)
             elif active_mode == "RIGHT_LEG":
-                controller.target_q[R_LEG_HIP_PITCH] = np.clip(controller.target_q[R_LEG_HIP_PITCH] + 0.05, -1.0, 1.0)
+                controller.target_q[R_HIP_PITCH] = np.clip(controller.target_q[R_HIP_PITCH] + 0.05, -1.0, 1.0)
             elif active_mode == "TORSO_TWIST":
                 controller.target_q[WAIST_PITCH] = np.clip(controller.target_q[WAIST_PITCH] + 0.05, -0.4, 0.6)
 
@@ -446,16 +489,16 @@ def simulate_g1(
                 robot.data.qpos[2] = squat_elevation
 
                 bend = (0.793 - squat_elevation) * 1.8
-                controller.target_q[L_LEG_KNEE] = max(0.0, bend)
-                controller.target_q[R_LEG_KNEE] = max(0.0, bend)
-                controller.target_q[L_LEG_HIP_PITCH] = -0.5 * bend
-                controller.target_q[R_LEG_HIP_PITCH] = -0.5 * bend
-                controller.target_q[L_LEG_ANKLE_PITCH] = -0.5 * bend
-                controller.target_q[R_LEG_ANKLE_PITCH] = -0.5 * bend
+                controller.target_q[L_KNEE] = max(0.0, bend)
+                controller.target_q[R_KNEE] = max(0.0, bend)
+                controller.target_q[L_HIP_PITCH] = -0.5 * bend
+                controller.target_q[R_HIP_PITCH] = -0.5 * bend
+                controller.target_q[L_ANKLE_PITCH] = -0.5 * bend
+                controller.target_q[R_ANKLE_PITCH] = -0.5 * bend
             elif active_mode == "LEFT_LEG":
-                controller.target_q[L_LEG_HIP_PITCH] = np.clip(controller.target_q[L_LEG_HIP_PITCH] - 0.05, -1.0, 1.0)
+                controller.target_q[L_HIP_PITCH] = np.clip(controller.target_q[L_HIP_PITCH] - 0.05, -1.0, 1.0)
             elif active_mode == "RIGHT_LEG":
-                controller.target_q[R_LEG_HIP_PITCH] = np.clip(controller.target_q[R_LEG_HIP_PITCH] - 0.05, -1.0, 1.0)
+                controller.target_q[R_HIP_PITCH] = np.clip(controller.target_q[R_HIP_PITCH] - 0.05, -1.0, 1.0)
             elif active_mode == "TORSO_TWIST":
                 controller.target_q[WAIST_PITCH] = np.clip(controller.target_q[WAIST_PITCH] - 0.05, -0.4, 0.6)
 
@@ -465,9 +508,9 @@ def simulate_g1(
             elif active_mode == "WAIST":
                 controller.target_q[WAIST_YAW] = np.clip(controller.target_q[WAIST_YAW] + 0.08, -1.2, 1.2)
             elif active_mode == "LEFT_LEG":
-                controller.target_q[L_LEG_HIP_ROLL] = np.clip(controller.target_q[L_LEG_HIP_ROLL] + 0.05, -0.4, 0.4)
+                controller.target_q[L_HIP_ROLL] = np.clip(controller.target_q[L_HIP_ROLL] + 0.05, -0.4, 0.4)
             elif active_mode == "RIGHT_LEG":
-                controller.target_q[R_LEG_HIP_ROLL] = np.clip(controller.target_q[R_LEG_HIP_ROLL] + 0.05, -0.4, 0.4)
+                controller.target_q[R_HIP_ROLL] = np.clip(controller.target_q[R_HIP_ROLL] + 0.05, -0.4, 0.4)
             elif active_mode == "TORSO_TWIST":
                 controller.target_q[WAIST_YAW] = np.clip(controller.target_q[WAIST_YAW] + 0.08, -1.2, 1.2)
 
@@ -477,9 +520,9 @@ def simulate_g1(
             elif active_mode == "WAIST":
                 controller.target_q[WAIST_YAW] = np.clip(controller.target_q[WAIST_YAW] - 0.08, -1.2, 1.2)
             elif active_mode == "LEFT_LEG":
-                controller.target_q[L_LEG_HIP_ROLL] = np.clip(controller.target_q[L_LEG_HIP_ROLL] - 0.05, -0.4, 0.4)
+                controller.target_q[L_HIP_ROLL] = np.clip(controller.target_q[L_HIP_ROLL] - 0.05, -0.4, 0.4)
             elif active_mode == "RIGHT_LEG":
-                controller.target_q[R_LEG_HIP_ROLL] = np.clip(controller.target_q[R_LEG_HIP_ROLL] - 0.05, -0.4, 0.4)
+                controller.target_q[R_HIP_ROLL] = np.clip(controller.target_q[R_HIP_ROLL] - 0.05, -0.4, 0.4)
             elif active_mode == "TORSO_TWIST":
                 controller.target_q[WAIST_YAW] = np.clip(controller.target_q[WAIST_YAW] - 0.08, -1.2, 1.2)
 
@@ -489,11 +532,11 @@ def simulate_g1(
             elif active_mode == "WAIST":
                 controller.target_q[WAIST_ROLL] = np.clip(controller.target_q[WAIST_ROLL] + 0.05, -0.4, 0.4)
             elif active_mode == "LEFT_LEG":
-                controller.target_q[L_LEG_KNEE] = np.clip(controller.target_q[L_LEG_KNEE] + 0.06, 0.0, 1.8)
-                controller.target_q[L_LEG_ANKLE_PITCH] = -0.5 * controller.target_q[L_LEG_KNEE]
+                controller.target_q[L_KNEE] = np.clip(controller.target_q[L_KNEE] + 0.06, 0.0, 1.8)
+                controller.target_q[L_ANKLE_PITCH] = -0.5 * controller.target_q[L_KNEE]
             elif active_mode == "RIGHT_LEG":
-                controller.target_q[R_LEG_KNEE] = np.clip(controller.target_q[R_LEG_KNEE] + 0.06, 0.0, 1.8)
-                controller.target_q[R_LEG_ANKLE_PITCH] = -0.5 * controller.target_q[R_LEG_KNEE]
+                controller.target_q[R_KNEE] = np.clip(controller.target_q[R_KNEE] + 0.06, 0.0, 1.8)
+                controller.target_q[R_ANKLE_PITCH] = -0.5 * controller.target_q[R_KNEE]
             elif active_mode == "TORSO_TWIST":
                 controller.target_q[WAIST_ROLL] = np.clip(controller.target_q[WAIST_ROLL] + 0.05, -0.4, 0.4)
 
@@ -503,11 +546,11 @@ def simulate_g1(
             elif active_mode == "WAIST":
                 controller.target_q[WAIST_ROLL] = np.clip(controller.target_q[WAIST_ROLL] - 0.05, -0.4, 0.4)
             elif active_mode == "LEFT_LEG":
-                controller.target_q[L_LEG_KNEE] = np.clip(controller.target_q[L_LEG_KNEE] - 0.06, 0.0, 1.8)
-                controller.target_q[L_LEG_ANKLE_PITCH] = -0.5 * controller.target_q[L_LEG_KNEE]
+                controller.target_q[L_KNEE] = np.clip(controller.target_q[L_KNEE] - 0.06, 0.0, 1.8)
+                controller.target_q[L_ANKLE_PITCH] = -0.5 * controller.target_q[L_KNEE]
             elif active_mode == "RIGHT_LEG":
-                controller.target_q[R_LEG_KNEE] = np.clip(controller.target_q[R_LEG_KNEE] - 0.06, 0.0, 1.8)
-                controller.target_q[R_LEG_ANKLE_PITCH] = -0.5 * controller.target_q[R_LEG_KNEE]
+                controller.target_q[R_KNEE] = np.clip(controller.target_q[R_KNEE] - 0.06, 0.0, 1.8)
+                controller.target_q[R_ANKLE_PITCH] = -0.5 * controller.target_q[R_KNEE]
             elif active_mode == "TORSO_TWIST":
                 controller.target_q[WAIST_ROLL] = np.clip(controller.target_q[WAIST_ROLL] - 0.05, -0.4, 0.4)
 
@@ -516,6 +559,11 @@ def simulate_g1(
 
             robot.data.xfrc_applied[robot.pelvis_bid, 0] = 60.0
             print('\n[PERTURBATION] >>> Applied 60 N physical push force to robot torso! <<<')
+
+        elif k == 'g':
+            is_part = robot.toggle_plane_type()
+            p_desc = "PARTITION PLANE (Checkerboard)" if is_part else "NORMAL PLANE (Solid Floor)"
+            print(f'\n[ENVIRONMENT] Ground plane changed to: {p_desc}')
 
 
         elif k == 'm':
@@ -658,12 +706,14 @@ def simulate_g1(
         if not is_playing_motion and active_mode == "ARM":
             safe_target, was_clamped = controller.step_ik(target_pos)
             target_pos = safe_target.copy()
+            robot.set_target_marker(target_pos)
+            last_mocap_pos = target_pos.copy()
         else:
             safe_target = robot.get_hand_pos(controller.right_arm)
             was_clamped = False
-
-        robot.set_target_marker(safe_target)
-        last_mocap_pos = safe_target.copy()
+            if is_playing_motion or active_mode != "ARM":
+                robot.set_target_marker(safe_target)
+                last_mocap_pos = safe_target.copy()
 
 
         if callback:
@@ -681,29 +731,29 @@ def simulate_g1(
                 tau_est=robot.get_joint_torques(),
                 base_pos=robot.get_base_pose()[0],
                 base_quat=robot.get_base_pose()[1],
-                left_hand_pos=robot.get_hand_pos(False),
-                right_hand_pos=robot.get_hand_pos(True),
+                left_wrist_pos=robot.get_hand_pos(False),
+                right_wrist_pos=robot.get_hand_pos(True),
                 imu_angvel=robot.get_imu_data()[1],
                 imu_linacc=robot.get_imu_data()[2],
             )
-            action = G1Action.zero(num_body=NUM_BODY_MOTORS)
+            action = G1Action()
             action.q_des[:] = controller.target_q
-            action.kp[:] = DEFAULT_KP[:NUM_BODY_MOTORS]
-            action.kd[:] = DEFAULT_KD[:NUM_BODY_MOTORS]
+            action.kp[:] = OFFICIAL_KP[:NUM_BODY_MOTORS]
+            action.kd[:] = OFFICIAL_KD[:NUM_BODY_MOTORS]
             recorder.record_state(state, action, safe_target)
 
 
         safety_mgr.feed_watchdog()
-        guarded_q, safety_status = safety_mgr.filter_and_guard(
+        action_out, safety_status = safety_mgr.filter_and_guard(
             target_q=controller.target_q,
             current_q=robot.get_joint_positions(),
             current_torques=robot.get_joint_torques(),
-            left_hand_p=robot.get_hand_pos(False),
-            right_hand_p=robot.get_hand_pos(True),
+            left_wrist_p=robot.get_hand_pos(False),
+            right_wrist_p=robot.get_hand_pos(True),
             pelvis_p=robot.get_base_pose()[0],
             base_height=float(robot.get_base_pose()[0][2]),
         )
-        controller.target_q[:] = guarded_q[:]
+        controller.target_q[:] = action_out.q_des[:]
 
 
         for _ in range(10):
@@ -800,6 +850,7 @@ def main():
     parser.add_argument("--loop", action="store_true", help="Loop playback continuously")
     parser.add_argument("--duration", type=float, default=0.0, help="Run duration in seconds (0=infinite)")
     parser.add_argument("--headless", action="store_true", help="Run in headless mode without GUI viewer")
+    parser.add_argument("--normal-plane", action="store_true", help="Start with normal solid ground plane instead of partition checkerboard")
     args = parser.parse_args()
 
     simulate_g1(
@@ -814,6 +865,7 @@ def main():
         loop=args.loop,
         duration=args.duration,
         headless=args.headless,
+        normal_plane=args.normal_plane,
     )
 
 

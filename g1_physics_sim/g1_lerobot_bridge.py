@@ -25,13 +25,18 @@ parent_dir = pathlib.Path(__file__).resolve().parent
 if str(parent_dir) not in sys.path:
     sys.path.insert(0, str(parent_dir))
 
-from g1_constants import (
-    LEFT_ARM_INDICES,
-    RIGHT_ARM_INDICES,
-    WAIST_INDICES,
+try:  # package and flat-script imports both work
+    from .g1_constants import (    LEFT_ARM_JOINTS,
+    RIGHT_ARM_JOINTS,
+    WAIST_JOINTS,
     NUM_BODY_MOTORS,
-    NOMINAL_STAND_Q,
-)
+    NOMINAL_STAND_Q)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_constants import (LEFT_ARM_JOINTS,
+RIGHT_ARM_JOINTS,
+WAIST_JOINTS,
+NUM_BODY_MOTORS,
+NOMINAL_STAND_Q)
 
 
 def export_to_unitree_lerobot(json_file_path: str, output_dir: str) -> str:
@@ -52,9 +57,9 @@ def export_to_unitree_lerobot(json_file_path: str, output_dir: str) -> str:
 
     for frame in frames:
         q = np.array(frame["joint_q"], dtype=np.float32)
-        left_arm_q = q[LEFT_ARM_INDICES].tolist()
-        right_arm_q = q[RIGHT_ARM_INDICES].tolist()
-        waist_q = q[WAIST_INDICES].tolist()
+        left_arm_q = q[LEFT_ARM_JOINTS].tolist()
+        right_arm_q = q[RIGHT_ARM_JOINTS].tolist()
+        waist_q = q[WAIST_JOINTS].tolist()
 
         lerobot_frames.append({
             "timestamp": frame["time"],
@@ -93,11 +98,11 @@ def import_from_unitree_lerobot(lerobot_json_path: str, output_traj_path: str = 
     for item in frames:
         full_q = NOMINAL_STAND_Q.copy()
         if "left_arm.qpos" in item:
-            full_q[LEFT_ARM_INDICES] = item["left_arm.qpos"]
+            full_q[LEFT_ARM_JOINTS] = item["left_arm.qpos"]
         if "right_arm.qpos" in item:
-            full_q[RIGHT_ARM_INDICES] = item["right_arm.qpos"]
+            full_q[RIGHT_ARM_JOINTS] = item["right_arm.qpos"]
         if "waist.qpos" in item:
-            full_q[WAIST_INDICES] = item["waist.qpos"]
+            full_q[WAIST_JOINTS] = item["waist.qpos"]
 
         sim_frames.append({
             "time": item.get("timestamp", len(sim_frames) * (1.0 / fps)),

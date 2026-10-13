@@ -1,95 +1,126 @@
+"""
+Single-owner runtime for the Unitree G1.
+
+Thread ownership
+----------------
+Exactly one component drives the control loop. `UnitreeG1Robot` owns:
+  * a control thread at control_dt (500 Hz on rt/lowcmd, 50 Hz on rt/arm_sdk)
+  * a policy thread at policy_dt (default 50 Hz)
+
+The bridge objects are deliberately thread-free and expose `tick()`. Two threads
+publishing the same LowCmd_ would race on the CRC and the arm_sdk weight ramp,
+so that arrangement is forbidden.
+
+Safety
+------
+* Emergency stop is latched and requires an explicit reset.
+* Joint velocity above limit demotes to SOFT_STOP (targets held), not E-stop;
+  a transient overshoot must not kill a run.
+* Motor fault codes (LowState_.motor_state[i].motorstate != 0) trigger E-stop.
+"""
 from __future__ import annotations
+
 import abc
-import time
+import copy
 import threading
-from typing import Dict, Optional, Any
+import time
+from typing import Any, Dict, Optional
+
 import numpy as np
 
-from g1_state import G1State, G1Action, G1Observation
-from g1_hardware_bridge import G1Bridge, create_g1_bridge
-from g1_robot import G1Robot
-from g1_constants import (
-    NUM_BODY_MOTORS, NUM_MOTORS, CONTROL_FREQ, PHYSICS_FREQ, DECIMATION,
-    DDS_DOMAIN_SIM, DDS_DOMAIN_REAL, DEFAULT_KP, DEFAULT_KD
-)
+try:  # package and flat-script imports both work
+    from .g1_constants import (    NUM_BODY_MOTORS, POLICY_FREQ, POLICY_DT, LOWCMD_CONTROL_DT,
+    DDS_DOMAIN_SIM, DDS_DOMAIN_REAL, ARM_SDK_CONTROL_DT,
+    OFFICIAL_KP, OFFICIAL_KD, NOMINAL_STAND_Q,
+    LEG_JOINTS, WAIST_JOINTS, LEFT_ARM_JOINTS, RIGHT_ARM_JOINTS,
+    MAX_JOINT_VELOCITY_FULL, FALL_HEIGHT_THRESHOLD,
+    MOTOR_MODE_ENABLE, MOTOR_MODE_DISABLE)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_constants import (NUM_BODY_MOTORS, POLICY_FREQ, POLICY_DT, LOWCMD_CONTROL_DT,
+DDS_DOMAIN_SIM, DDS_DOMAIN_REAL, ARM_SDK_CONTROL_DT,
+OFFICIAL_KP, OFFICIAL_KD, NOMINAL_STAND_Q,
+LEG_JOINTS, WAIST_JOINTS, LEFT_ARM_JOINTS, RIGHT_ARM_JOINTS,
+MAX_JOINT_VELOCITY_FULL, FALL_HEIGHT_THRESHOLD,
+MOTOR_MODE_ENABLE, MOTOR_MODE_DISABLE)
+try:  # package and flat-script imports both work
+    from .g1_hardware_bridge import (    G1Bridge,
+    G1RealHardwareBridge,
+    create_g1_bridge)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_hardware_bridge import (G1Bridge,
+G1RealHardwareBridge,
+create_g1_bridge)
+try:  # package and flat-script imports both work
+    from .g1_state import (    G1Action,
+    G1Observation,
+    G1State)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_state import (G1Action,
+G1Observation,
+G1State)
 
 
 class Policy(abc.ABC):
-    """Abstract base class for G1 policies."""
+    """Base class for anything that turns state into commands."""
 
     @abc.abstractmethod
-    def reset(self, state: G1State) -> None:
-        """Called at the start of an episode or when policy is (re)started."""
-        pass
+    def reset(self, state: G1State) -> None: ...
 
     @abc.abstractmethod
-    def step(self, state: G1State) -> G1Action:
-        """Compute action from current state. Called at policy rate (e.g., 50 Hz)."""
-        pass
+    def step(self, state: G1State) -> G1Action: ...
 
     @abc.abstractmethod
-    def get_observation(self, state: G1State) -> G1Observation:
-        """Extract observation from state for logging/debugging."""
-        pass
+    def get_observation(self, state: G1State) -> G1Observation: ...
 
     @property
     @abc.abstractmethod
-    def action_dim(self) -> int:
-        """Dimension of action space."""
-        pass
+    def action_dim(self) -> int: ...
 
     @property
     @abc.abstractmethod
-    def obs_dim(self) -> int:
-        """Dimension of observation space."""
-        pass
+    def obs_dim(self) -> int: ...
 
     def configure(self, config: Dict[str, Any]) -> None:
-        """Optional configuration method."""
         pass
 
     def get_info(self) -> Dict[str, Any]:
-        """Return policy info for logging."""
         return {}
 
 
 class UnitreeG1Robot:
-    """
-    Main robot class that handles:
-    - DDS communication (sim or real)
-    - Two-thread architecture (500 Hz control + policy rate)
-    - Safety monitoring
-    - Sim-to-real deployment
-    """
-
     def __init__(
         self,
         mode: str = 'sim',
         iface: str = 'Ethernet',
         domain_id: Optional[int] = None,
-        num_motors: int = NUM_BODY_MOTORS,
-        policy_rate: int = CONTROL_FREQ,
+        policy_rate: int = POLICY_FREQ,
+        control_path: str = 'full',
         fix_base: bool = True,
-        enable_elastic_band: bool = True,
-        robot: Optional[G1Robot] = None
+        enable_elastic_band: bool = False,
+        robot=None,
+        max_joint_velocity: float = MAX_JOINT_VELOCITY_FULL,
+        fall_height_threshold: float = FALL_HEIGHT_THRESHOLD,
     ):
         self.mode = mode.lower()
-        self.iface = iface
-        self.domain_id = domain_id
-        self.num_motors = num_motors
-        self.policy_rate = policy_rate
-        self.policy_dt = 1.0 / policy_rate
-        self.control_dt = 1.0 / PHYSICS_FREQ
+        self.control_path = control_path
+        self.policy_rate = int(policy_rate)
+        self.policy_dt = 1.0 / self.policy_rate
+        self.control_dt = ARM_SDK_CONTROL_DT if control_path == 'arm' else LOWCMD_CONTROL_DT
+
+        if self.mode not in ('sim', 'hardware'):
+            raise ValueError("mode must be 'sim' or 'hardware'")
+        if self.mode == 'sim' and domain_id is None:
+            domain_id = DDS_DOMAIN_SIM
+        elif self.mode == 'hardware' and domain_id is None:
+            domain_id = DDS_DOMAIN_REAL
 
         self.bridge: G1Bridge = create_g1_bridge(
-            mode=self.mode,
-            iface=self.iface,
-            domain_id=self.domain_id,
-            robot=robot,
-            num_motors=self.num_motors
+            mode=self.mode, iface=iface, domain_id=domain_id, robot=robot,
+            num_motors=NUM_BODY_MOTORS, control_path=control_path,
         )
 
         self._running = False
+        self._estop_latched = False
         self._policy: Optional[Policy] = None
 
         self._control_thread: Optional[threading.Thread] = None
@@ -99,193 +130,256 @@ class UnitreeG1Robot:
         self._latest_state: Optional[G1State] = None
         self._latest_action: Optional[G1Action] = None
 
-        self._step_count = 0
         self._start_time = 0.0
+        self._step_count = 0
+        self._policy_errors = 0
 
-        self._safety_limits = {
-            'max_joint_vel': 1.2,
-            'max_joint_acc': 10.0,
-            'max_torque': 100.0,
-            'fall_height_threshold': 0.45,
-        }
+        self.max_joint_velocity = float(max_joint_velocity)
+        self.fall_height_threshold = float(fall_height_threshold)
 
-        self._collision_detected = False
-        self._emergency_stopped = False
+        print(f'[UnitreeG1Robot] mode={self.mode} path={control_path} '
+              f'iface={iface} domain={domain_id} '
+              f'control={1.0 / self.control_dt:.0f}Hz policy={self.policy_rate}Hz')
 
-        print(f"[UnitreeG1Robot] Initialized in {self.mode.upper()} mode")
-        print(f"  - Motors: {self.num_motors}")
-        print(f"  - Policy rate: {self.policy_rate} Hz")
-        print(f"  - Control rate: {PHYSICS_FREQ} Hz")
-
+    # ------------------------------------------------------------- lifecycle
     def set_policy(self, policy: Policy) -> None:
         self._policy = policy
-        print(f"[UnitreeG1Robot] Policy set: {policy.__class__.__name__}")
+        print(f'[UnitreeG1Robot] policy={type(policy).__name__}')
 
     def start(self, wait_for_robot: bool = True, timeout: float = 5.0) -> bool:
         if self._running:
-            print("[UnitreeG1Robot] Already running")
             return True
-
-        if self.mode == 'hardware':
-            if wait_for_robot:
-                if not self.bridge.wait_for_robot(timeout):
-                    print("[UnitreeG1Robot] Failed to connect to robot")
-                    return False
-
-            policy_callback = self._policy_step if self._policy else None
-            if not self.bridge.start_streaming(policy_callback):
-                print("[UnitreeG1Robot] Failed to start hardware streaming")
-                return False
-        else:
-            self._running = True
-            self._control_thread = threading.Thread(target=self._control_loop, name="G1ControlLoop", daemon=True)
-            self._control_thread.start()
-
-            if self._policy:
-                self._policy_thread = threading.Thread(target=self._policy_loop, name="G1PolicyLoop", daemon=True)
-                self._policy_thread.start()
+        if self._estop_latched:
+            print('[UnitreeG1Robot] E-stop is latched; call reset_estop() first.')
+            return False
 
         self._start_time = time.time()
-        print("[UnitreeG1Robot] Started successfully")
+        self._step_count = 0
+
+        if isinstance(self.bridge, G1RealHardwareBridge):
+            if wait_for_robot and not self.bridge.wait_for_robot(timeout):
+                print('[UnitreeG1Robot] no LowState; refusing to start.')
+                return False
+            problems = self.bridge.validate_state()
+            if problems:
+                print('[UnitreeG1Robot] PRE-FLIGHT FAILED:')
+                for p in problems:
+                    print(f'  - {p}')
+                return False
+            if not self.bridge.start_streaming():
+                print('[UnitreeG1Robot] start_streaming() refused.')
+                return False
+
+        # Prime state so the policy sees a valid first observation.
+        self._update_state()
+        if self._policy is not None and self._latest_state is not None:
+            try:
+                self._policy.reset(self._latest_state)
+            except Exception as e:
+                print(f'[UnitreeG1Robot] policy.reset() failed: {e}')
+                return False
+
+        self._running = True
+        self._control_thread = threading.Thread(target=self._control_loop, name='G1Ctrl', daemon=True)
+        self._control_thread.start()
+        if self._policy is not None:
+            self._policy_thread = threading.Thread(target=self._policy_loop, name='G1Policy', daemon=True)
+            self._policy_thread.start()
+        print('[UnitreeG1Robot] running')
         return True
 
     def stop(self) -> None:
+        """Graceful stop: ramp down, release, join. Does NOT latch E-stop."""
         if not self._running:
-            return
-
-        self._running = False
-        self._emergency_stopped = True
-
-        if self.mode == 'hardware':
             self.bridge.close()
-        else:
-            if self._control_thread:
-                self._control_thread.join(timeout=1.0)
-            if self._policy_thread:
-                self._policy_thread.join(timeout=1.0)
+            return
+        self._running = False
+        if self._control_thread:
+            self._control_thread.join(timeout=2.0)
+            self._control_thread = None
+        if self._policy_thread:
+            self._policy_thread.join(timeout=2.0)
+            self._policy_thread = None
+        self.bridge.close()
+        print('[UnitreeG1Robot] stopped')
 
-        print("[UnitreeG1Robot] Stopped")
-
-    def emergency_stop(self) -> None:
-        print("[UnitreeG1Robot] !!! EMERGENCY STOP !!!")
-        self._emergency_stopped = True
-        if self.mode == 'hardware':
+    def emergency_stop(self, reason: str = 'manual') -> None:
+        """Latch E-stop, publish motor-disable immediately."""
+        print(f'\n[UnitreeG1Robot] !!! EMERGENCY STOP ({reason}) !!!')
+        self._estop_latched = True
+        self._running = False
+        try:
             self.bridge.emergency_stop()
-        self.stop()
+        except Exception as e:
+            print(f'[UnitreeG1Robot] e-stop publish error: {e}')
 
+    def reset_estop(self) -> bool:
+        """Clear a latched E-stop. Requires a fresh, valid pre-flight check."""
+        if isinstance(self.bridge, G1RealHardwareBridge):
+            problems = self.bridge.validate_state()
+            if problems:
+                print('[UnitreeG1Robot] cannot clear E-stop:')
+                for p in problems:
+                    print(f'  - {p}')
+                return False
+        self._estop_latched = False
+        print('[UnitreeG1Robot] E-stop cleared')
+        return True
+
+    # ---------------------------------------------------------------- loops
     def _control_loop(self) -> None:
-        """500 Hz control loop."""
-        while self._running and not self._emergency_stopped:
-            loop_start = time.time()
-
+        period = self.control_dt
+        next_t = time.perf_counter()
+        while self._running and not self._estop_latched:
             self._update_state()
-
-            if self._latest_action is not None:
-                self.bridge.send_joint_targets(
-                    q_des=self._latest_action.q_des,
-                    kp=self._latest_action.kp,
-                    kd=self._latest_action.kd,
-                    dq_des=self._latest_action.dq_des,
-                    tau_ff=self._latest_action.tau_ff
-                )
-
-            self._check_safety()
-
-            elapsed = time.time() - loop_start
-            sleep_time = max(0.0, self.control_dt - elapsed)
-            time.sleep(sleep_time)
+            try:
+                self.bridge.tick()
+            except Exception as e:
+                print(f'[UnitreeG1Robot] bridge tick error: {e}')
+                self.emergency_stop('bridge tick failure')
+                break
+            self._step_count += 1
+            if (self._step_count & 0x3F) == 0:
+                self._check_safety()
+            next_t += period
+            sleep_s = next_t - time.perf_counter()
+            if sleep_s < 0:
+                next_t = time.perf_counter()  # overran; resync
+            else:
+                time.sleep(sleep_s)
 
     def _policy_loop(self) -> None:
-        """Policy rate loop."""
-        while self._running and not self._emergency_stopped:
-            loop_start = time.time()
-
+        period = self.policy_dt
+        next_t = time.perf_counter()
+        while self._running and not self._estop_latched:
             self._policy_step()
-
-            elapsed = time.time() - loop_start
-            sleep_time = max(0.0, self.policy_dt - elapsed)
-            time.sleep(sleep_time)
+            next_t += period
+            sleep_s = next_t - time.perf_counter()
+            if sleep_s < 0:
+                next_t = time.perf_counter()
+            else:
+                time.sleep(sleep_s)
 
     def _policy_step(self) -> None:
-        if self._policy is None or self._latest_state is None:
+        if self._policy is None:
             return
-
+        with self._state_lock:
+            state = self._latest_state
+        if state is None:
+            return
         try:
-            action = self._policy.step(self._latest_state)
-            with self._state_lock:
-                self._latest_action = action
+            action = self._policy.step(copy.deepcopy(state))
         except Exception as e:
-            print(f"[UnitreeG1Robot] Policy step error: {e}")
-            self.emergency_stop()
+            self._policy_errors += 1
+            print(f'[UnitreeG1Robot] policy.step error #{self._policy_errors}: {e}')
+            if self._policy_errors >= 3:
+                self.emergency_stop('repeated policy exceptions')
+            return
+        if not isinstance(action, G1Action):
+            self.emergency_stop('policy returned a non-G1Action')
+            return
+        with self._state_lock:
+            self._latest_action = action
+        self.bridge.send_joint_targets(
+            q_des=action.q_des, kp=action.kp, kd=action.kd,
+            dq_des=action.dq_des, tau_ff=action.tau_ff,
+        )
 
+    # ---------------------------------------------------------------- state
     def _update_state(self) -> None:
         q, dq = self.bridge.get_joint_states()
         imu_quat, imu_angvel, imu_linacc = self.bridge.get_imu_state()
 
+        q = np.asarray(q, dtype=np.float32).reshape(NUM_BODY_MOTORS)
+        dq = np.asarray(dq, dtype=np.float32).reshape(NUM_BODY_MOTORS)
+
         state = G1State(
             timestamp=time.time() - self._start_time,
-            q=q[:self.num_motors] if len(q) >= self.num_motors else q,
-            dq=dq[:self.num_motors] if len(dq) >= self.num_motors else dq,
-            imu_quat=imu_quat,
-            imu_angvel=imu_angvel,
-            imu_linacc=imu_linacc,
+            q=q, dq=dq,
+            imu_quat=imu_quat, imu_angvel=imu_angvel, imu_linacc=imu_linacc,
         )
 
-        if hasattr(self.bridge, 'robot') and self.bridge.robot is not None:
-            robot = self.bridge.robot
+        robot = getattr(self.bridge, 'robot', None)
+        if robot is not None:
             state.base_pos, state.base_quat = robot.get_base_pose()
             state.base_linvel, state.base_angvel = robot.get_base_vel()
-            state.left_hand_pos = robot.get_hand_pos(False)
-            state.right_hand_pos = robot.get_hand_pos(True)
+            state.left_wrist_pos = robot.get_hand_pos(False)
+            state.right_wrist_pos = robot.get_hand_pos(True)
+            state.left_wrist_quat = robot.get_hand_quat(False)
+            state.right_wrist_quat = robot.get_hand_quat(True)
             state.left_foot_contact, state.right_foot_contact = robot.get_foot_contacts()
+            state.tau_est = robot.get_joint_torques()
+            state.mode_pr = robot.mode_pr
+
+        hw = self.bridge if isinstance(self.bridge, G1RealHardwareBridge) else None
+        if hw is not None:
+            with hw._state_lock:
+                state.tau_est = hw._latest_tau.copy()
+                state.motor_state = hw._latest_motor_state.copy()
+                state.mode_pr = hw.mode_pr
+                state.mode_machine = hw.mode_machine
+                state.crc_ok = hw._crc_failures == 0
+            hw_angvel = hw._imu_angvel.copy()
+            state.imu_angvel = hw_angvel
 
         with self._state_lock:
             self._latest_state = state
 
+    # --------------------------------------------------------------- safety
     def _check_safety(self) -> None:
-        if self._latest_state is None:
+        with self._state_lock:
+            state = self._latest_state
+        if state is None:
             return
 
-
-        if np.any(np.abs(self._latest_state.dq) > self._safety_limits['max_joint_vel']):
-            print("[UnitreeG1Robot] Safety: Joint velocity limit exceeded")
-            self.emergency_stop()
+        if state.any_motor_faulted:
+            self.emergency_stop(f'motor fault {state.get_faulted_motors()}')
             return
 
+        if not np.all(np.isfinite(state.q)) or not np.all(np.isfinite(state.dq)):
+            self.emergency_stop('non-finite joint feedback')
+            return
 
-        if self.mode == 'sim' and hasattr(self.bridge, 'robot'):
-            base_pos, _ = self.bridge.robot.get_base_pose()
-            if base_pos[2] < self._safety_limits['fall_height_threshold']:
-                print(f"[UnitreeG1Robot] Safety: Robot fell (height={base_pos[2]:.2f}m)")
-                self.emergency_stop()
+        # Overspeed is a soft condition: hold position, do not latch E-stop.
+        if np.any(np.abs(state.dq) > self.max_joint_velocity):
+            with self._state_lock:
+                if self._latest_action is not None:
+                    self._latest_action.q_des[:] = state.q
+                    self._latest_action.dq_des[:] = 0.0
 
+        if self.mode == 'sim':
+            robot = getattr(self.bridge, 'robot', None)
+            if robot is not None and not self.bridge.is_hardware_active():
+                base_h = robot.get_base_pose()[0][2]
+                if base_h < self.fall_height_threshold:
+                    self.emergency_stop(f'fall: base z={base_h:.2f}m')
+
+    # -------------------------------------------------------------- getters
     def get_state(self) -> Optional[G1State]:
         with self._state_lock:
-            return self._latest_state.copy() if self._latest_state else None
+            return copy.deepcopy(self._latest_state) if self._latest_state else None
 
     def get_action(self) -> Optional[G1Action]:
         with self._state_lock:
-            return self._latest_action.copy() if self._latest_action else None
+            return copy.deepcopy(self._latest_action) if self._latest_action else None
 
     def is_running(self) -> bool:
-        return self._running and not self._emergency_stopped
+        return self._running and not self._estop_latched
 
     def is_hardware_active(self) -> bool:
         return self.bridge.is_hardware_active()
 
-    def set_safety_limit(self, key: str, value: float) -> None:
-        if key in self._safety_limits:
-            self._safety_limits[key] = value
-
     def get_info(self) -> Dict[str, Any]:
         return {
             'mode': self.mode,
+            'control_path': self.control_path,
             'running': self._running,
             'hardware_active': self.is_hardware_active(),
             'step_count': self._step_count,
-            'uptime': time.time() - self._start_time if self._start_time > 0 else 0,
-            'safety_limits': self._safety_limits,
-            'emergency_stopped': self._emergency_stopped,
+            'uptime': (time.time() - self._start_time) if self._start_time else 0.0,
+            'estop_latched': self._estop_latched,
+            'policy_errors': self._policy_errors,
+            'max_joint_velocity': self.max_joint_velocity,
         }
 
 
@@ -294,33 +388,28 @@ def run_policy(
     mode: str = 'sim',
     iface: str = 'Ethernet',
     domain_id: Optional[int] = None,
-    num_motors: int = NUM_BODY_MOTORS,
-    policy_rate: int = CONTROL_FREQ,
+    policy_rate: int = POLICY_FREQ,
+    control_path: str = 'full',
     duration: Optional[float] = None,
     fix_base: bool = True,
-    enable_elastic_band: bool = True,
+    enable_elastic_band: bool = False,
+    robot=None,
 ) -> UnitreeG1Robot:
-    """Convenience function to run a policy."""
-    robot = UnitreeG1Robot(
-        mode=mode,
-        iface=iface,
-        domain_id=domain_id,
-        num_motors=num_motors,
-        policy_rate=policy_rate,
-        fix_base=fix_base,
-        enable_elastic_band=enable_elastic_band,
+    runner = UnitreeG1Robot(
+        mode=mode, iface=iface, domain_id=domain_id, policy_rate=policy_rate,
+        control_path=control_path, fix_base=fix_base,
+        enable_elastic_band=enable_elastic_band, robot=robot,
     )
-    robot.set_policy(policy)
-
-    if robot.start():
+    runner.set_policy(policy)
+    if runner.start():
         try:
-            if duration:
+            if duration and duration > 0:
                 time.sleep(duration)
             else:
-                while robot.is_running():
-                    time.sleep(1.0)
+                while runner.is_running():
+                    time.sleep(0.5)
         except KeyboardInterrupt:
-            print("\n[UnitreeG1Robot] Interrupted by user")
+            print('\n[UnitreeG1Robot] interrupted')
         finally:
-            robot.stop()
-    return robot
+            runner.stop()
+    return runner

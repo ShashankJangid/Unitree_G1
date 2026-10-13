@@ -5,23 +5,36 @@ import pathlib
 import time
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
-from g1_constants import (
-    JOINT_NAMES_29DOF, JOINT_NAMES_43DOF, NOMINAL_STAND_Q, NUM_MOTORS, NUM_BODY_MOTORS,
-    L_SHOULDER_PITCH, L_ELBOW, L_WRIST_ROLL, R_SHOULDER_PITCH, R_ELBOW, R_WRIST_ROLL
-)
-from g1_state import G1State, G1Action
+try:  # package and flat-script imports both work
+    from .g1_constants import (    JOINT_NAMES_29DOF, NOMINAL_STAND_Q, NUM_BODY_MOTORS,
+    L_HIP_PITCH, L_KNEE, L_ANKLE_PITCH, R_HIP_PITCH, R_KNEE, R_ANKLE_PITCH,
+    L_SHOULDER_PITCH, L_ELBOW, L_WRIST_ROLL,
+    R_SHOULDER_PITCH, R_ELBOW, R_WRIST_ROLL)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_constants import (JOINT_NAMES_29DOF, NOMINAL_STAND_Q, NUM_BODY_MOTORS,
+L_HIP_PITCH, L_KNEE, L_ANKLE_PITCH, R_HIP_PITCH, R_KNEE, R_ANKLE_PITCH,
+L_SHOULDER_PITCH, L_ELBOW, L_WRIST_ROLL,
+R_SHOULDER_PITCH, R_ELBOW, R_WRIST_ROLL)
+try:  # package and flat-script imports both work
+    from .g1_state import (    G1State,
+    G1Action)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_state import (G1State,
+G1Action)
 
 
 class TrajectoryRecorder:
 
     def __init__(self, output_dir: Optional[str] = None, num_motors: int = NUM_BODY_MOTORS):
+        if num_motors != NUM_BODY_MOTORS:
+            raise ValueError('G1 body trajectories are exactly 29 motors')
         if output_dir is None:
             self.output_dir = pathlib.Path(__file__).resolve().parent / 'trajectories'
         else:
             self.output_dir = pathlib.Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.num_motors = num_motors
-        self.joint_names = JOINT_NAMES_43DOF if num_motors == NUM_MOTORS else JOINT_NAMES_29DOF
+        self.num_motors = NUM_BODY_MOTORS
+        self.joint_names = list(JOINT_NAMES_29DOF)
         self.is_recording = False
         self.frames: List[Dict[str, Any]] = []
         self.start_time = 0.0
@@ -52,8 +65,10 @@ class TrajectoryRecorder:
             'imu_linacc': [round(float(v), 4) for v in state.imu_linacc],
             'left_foot_contact': state.left_foot_contact,
             'right_foot_contact': state.right_foot_contact,
-            'left_hand_pos': [round(float(v), 4) for v in state.left_hand_pos],
-            'right_hand_pos': [round(float(v), 4) for v in state.right_hand_pos],
+            'left_wrist_pos': [round(float(v), 4) for v in state.left_wrist_pos],
+            'right_wrist_pos': [round(float(v), 4) for v in state.right_wrist_pos],
+            'mode_pr': state.mode_pr,
+            'mode_machine': state.mode_machine,
         }
         if action is not None:
             frame['q_des'] = [round(float(val), 5) for val in action.q_des[:self.num_motors]]
@@ -104,9 +119,24 @@ class TrajectoryPlayer:
         self.frames = self.data.get('frames', [])
         if len(self.frames) == 0:
             raise ValueError('Trajectory contains 0 frames!')
+
+        recorded = int(self.data.get('num_motors', NUM_BODY_MOTORS))
+        if recorded != NUM_BODY_MOTORS:
+            raise ValueError(
+                f'Trajectory has {recorded} motors; G1 body trajectories must be {NUM_BODY_MOTORS}. '
+                'Hands are recorded on a separate channel.'
+            )
+        width = len(self.frames[0].get('joint_q', []))
+        if width != NUM_BODY_MOTORS:
+            raise ValueError(f'Frame width {width} != {NUM_BODY_MOTORS}')
+
         self.duration = float(self.data.get('duration_sec', 1.0))
+        if self.duration <= 0:
+            self.duration = float(self.times[-1]) if self.times[-1] > 0 else 1.0
         self.num_frames = len(self.frames)
-        self.times = np.array([f['time'] for f in self.frames], dtype=np.float32)
+        self.times = np.array([f['time'] for f in self.frames], dtype=np.float64)
+        if not np.all(np.diff(self.times) >= 0):
+            self.times = np.sort(self.times)
         self.joint_trajectories = np.array([f['joint_q'] for f in self.frames], dtype=np.float32)
         self.q_des_trajectories = None
         if 'q_des' in self.frames[0]:
@@ -127,56 +157,40 @@ class TrajectoryPlayer:
         self.is_playing = True
         print(f"\n[PLAYER] >>> Playing trajectory '{self.file_path.name}' ({self.duration:.1f}s, Loop={loop}) <<<")
 
-    def get_frame(self, speed_mult: float = 1.0) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], bool]:
+    def get_frame(self, speed_mult: float = 1.0):
+        """Interpolate the trajectory at the current wall-clock offset."""
         if not self.is_playing:
             return (None, None, None, None, True)
-        elapsed = (time.time() - self.play_start_time) * speed_mult
+        elapsed = (time.time() - self.play_start_time) * max(0.0, speed_mult)
         is_finished = False
         if elapsed >= self.duration:
             if self.loop:
-                elapsed = elapsed % max(0.001, self.duration)
+                elapsed = elapsed % max(1e-3, self.duration)
             else:
                 elapsed = self.duration
                 is_finished = True
                 self.is_playing = False
-        q_interp = np.zeros(NUM_BODY_MOTORS, dtype=np.float32)
-        q_des_interp = None
-        kp_interp = None
-        kd_interp = None
-        num_joints = self.joint_trajectories.shape[1]
-        for i in range(num_joints):
-            q_interp[i] = float(np.interp(elapsed, self.times, self.joint_trajectories[:, i]))
-        if self.q_des_trajectories is not None:
-            q_des_interp = np.zeros(num_joints, dtype=np.float32)
-            for i in range(num_joints):
-                q_des_interp[i] = float(np.interp(elapsed, self.times, self.q_des_trajectories[:, i]))
-        if self.kp_trajectories is not None:
-            kp_interp = np.zeros(num_joints, dtype=np.float32)
-            for i in range(num_joints):
-                kp_interp[i] = float(np.interp(elapsed, self.times, self.kp_trajectories[:, i]))
-        if self.kd_trajectories is not None:
-            kd_interp = np.zeros(num_joints, dtype=np.float32)
-            for i in range(num_joints):
-                kd_interp[i] = float(np.interp(elapsed, self.times, self.kd_trajectories[:, i]))
-        return (q_interp, q_des_interp, kp_interp, kd_interp, is_finished)
+
+        def interp(mat: Optional[np.ndarray]) -> Optional[np.ndarray]:
+            if mat is None:
+                return None
+            return np.array([np.interp(elapsed, self.times, mat[:, i])
+                             for i in range(mat.shape[1])], dtype=np.float32)
+
+        return (interp(self.joint_trajectories), interp(self.q_des_trajectories),
+                interp(self.kp_trajectories), interp(self.kd_trajectories), is_finished)
 
     def get_action(self, speed_mult: float = 1.0) -> Tuple[Optional[G1Action], bool]:
+        """Measured-joint playback action with official default gains."""
         q, q_des, kp, kd, is_finished = self.get_frame(speed_mult)
         if q is None:
             return (None, True)
-        action = G1Action.zero(num_body=min(NUM_BODY_MOTORS, len(q)))
-        action.q_des[:len(q)] = q
-        if q_des is not None:
-            action.q_des[:len(q_des)] = q_des
-        if kp is not None:
-            action.kp[:len(kp)] = kp
-        else:
-            action.kp[:] = 60.0
-        if kd is not None:
-            action.kd[:len(kd)] = kd
-        else:
-            action.kd[:] = 1.5
-        action.enable_arm_sdk = True
+        action = G1Action()
+        # Trajectories store the measured joint_q; when a q_des channel exists
+        # it is the authoritative command (records both).
+        action.q_des[:] = q_des if q_des is not None else q
+        action.kp[:] = kp if kp is not None else OFFICIAL_KP
+        action.kd[:] = kd if kd is not None else OFFICIAL_KD
         return (action, is_finished)
 
     def stop(self):
@@ -277,12 +291,12 @@ class G1MovementScripts:
         frames = []
         stand_q = NOMINAL_STAND_Q.copy()
         squat_q = stand_q.copy()
-        squat_q[L_LEG_HIP_PITCH] = -0.8
-        squat_q[L_LEG_KNEE] = 1.5
-        squat_q[L_LEG_ANKLE_PITCH] = -0.7
-        squat_q[R_LEG_HIP_PITCH] = -0.8
-        squat_q[R_LEG_KNEE] = 1.5
-        squat_q[R_LEG_ANKLE_PITCH] = -0.7
+        squat_q[L_HIP_PITCH] = -0.8
+        squat_q[L_KNEE] = 1.5
+        squat_q[L_ANKLE_PITCH] = -0.7
+        squat_q[R_HIP_PITCH] = -0.8
+        squat_q[R_KNEE] = 1.5
+        squat_q[R_ANKLE_PITCH] = -0.7
         for idx in range(num_frames):
             t = idx / fps
             ratio = t / duration

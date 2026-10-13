@@ -3,7 +3,12 @@ import sys
 import time
 import socket
 import numpy as np
-from g1_constants import JOINT_NAMES_29DOF, NUM_BODY_MOTORS, NUM_MOTORS
+try:  # package and flat-script imports both work
+    from .g1_constants import (    JOINT_NAMES_29DOF,
+    NUM_BODY_MOTORS)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_constants import (JOINT_NAMES_29DOF,
+NUM_BODY_MOTORS)
 
 def list_local_network_interfaces():
     print('=' * 65)
@@ -92,7 +97,7 @@ def check_robot_dds(iface: str, domain_id: int=0, timeout: float=3.0):
     print('\n--- Live Arm Joint Feedback ---')
     print(f"{'Index':<6} {'Joint Name':<28} {'Pos (deg)':<12} {'Vel (rad/s)':<12} {'Temp (C)':<10}")
     print('-' * 68)
-    for i in range(15, min(NUM_MOTORS, len(msg.motor_state))):
+    for i in range(15, min(NUM_BODY_MOTORS, len(msg.motor_state))):
         ms = msg.motor_state[i]
         deg = float(ms.q) * (180.0 / 3.14159)
         vel = float(ms.dq)

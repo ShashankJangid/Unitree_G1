@@ -4,10 +4,24 @@ import sys
 import time
 import numpy as np
 from mujoco import viewer as mj_viewer
-from g1_constants import NOMINAL_STAND_Q
-from g1_robot import G1Robot
-from g1_hardware_bridge import create_g1_bridge, G1RealHardwareBridge
-from g1_trajectory_manager import TrajectoryPlayer
+try:  # package and flat-script imports both work
+    from .g1_constants import (    NOMINAL_STAND_Q)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_constants import (NOMINAL_STAND_Q)
+try:  # package and flat-script imports both work
+    from .g1_robot import (    G1Robot)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_robot import (G1Robot)
+try:  # package and flat-script imports both work
+    from .g1_hardware_bridge import (    create_g1_bridge,
+    G1RealHardwareBridge)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_hardware_bridge import (create_g1_bridge,
+G1RealHardwareBridge)
+try:  # package and flat-script imports both work
+    from .g1_trajectory_manager import (    TrajectoryPlayer)
+except ImportError:  # pragma: no cover - flat script layout
+    from g1_trajectory_manager import (TrajectoryPlayer)
 
 def play_motion():
     parser = argparse.ArgumentParser(description='Replay recorded motion on Unitree G1')
