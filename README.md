@@ -1,197 +1,306 @@
-# Unitree G1 Humanoid Robot Framework
+# Unitree G1 - Sim-to-Real Robotics Framework
 
-A comprehensive, production-ready software and simulation suite for the **Unitree G1 (29-DoF EDU)** humanoid robot. This repository brings together high-fidelity MuJoCo physics simulation, real-time Cartesian teleoperation with interactive 3D mouse tracking, motion recording and trajectory playback, hardware deployment bridges, reinforcement learning environments, and sensor processing pipelines (LiDAR SLAM, RealSense depth streaming, and GUI teleoperation).
+A production-ready Python framework for controlling the Unitree G1 humanoid robot in both simulation (MuJoCo) and on real hardware. Features a unified sim-to-real pipeline with identical code paths.
 
----
+## Features
 
-## 📑 Table of Contents
+- **Unified Sim-to-Real**: Same policy code runs in MuJoCo simulation and on real G1 hardware
+- **Two-Thread Architecture**: 500Hz control loop + configurable policy rate (default 50Hz)
+- **DDS Domain Separation**: Simulation uses domain 1, real robot uses domain 0 (prevents accidental cross-talk)
+- **Safety First**: Emergency stop, joint limit enforcement, fall detection, velocity clamping
+- **Elastic Band Support**: Virtual gantry for safe simulation of free-standing humanoid
+- **MotionSwitcher Integration**: Automatic release of onboard sport service before low-level control
+- **Arm SDK Support**: Low-level arm control via `rt/arm_sdk` DDS topic
+- **Trajectory Recording/Playback**: Record and replay full-body motions
+- **Policy Framework**: Abstract `Policy` interface with examples (stand, wave, ankle swing, locomotion)
+- **RL Environments**: Gymnasium-compatible environments for arm reaching and locomotion
 
-- [Overview](#overview)
-- [Key Features](#key-features)
-- [Repository Architecture](#repository-architecture)
-- [Modules Breakdown](#modules-breakdown)
-  - [1. Real-Physics Simulation & Hardware Bridge (`g1_physics_sim`)](#1-real-physics-simulation--hardware-bridge-g1_physics_sim)
-  - [2. Vision, SLAM, Teleop & RL Stack (`unitree_g1_vibes`)](#2-vision-slam-teleop--rl-stack-unitree_g1_vibes)
-- [Safety & Kinematic Governors](#safety--kinematic-governors)
-- [Interactive Controls & Teleoperation](#interactive-controls--teleoperation)
-- [Installation & Quick Start](#installation--quick-start)
-- [Physics Verification](#physics-verification)
-- [License](#license)
-
----
-
-## 🌟 Overview
-
-The **Unitree G1 Humanoid Robot Framework** provides an end-to-end platform bridging theoretical robotics simulation with physical deployment on the 29-DoF Unitree G1 humanoid platform. Designed with modularity and hardware safety in mind, it enables researchers and robotics engineers to rapidly prototype motor controllers, record complex whole-body choreographies, train RL policies, process Livox Mid-360 LiDAR and Intel RealSense visual data, and execute commands safely over Unitree SDK2 DDS channels.
-
----
-
-## 🚀 Key Features
-
-- **Interactive 3D Simulation & Teleoperation**:
-  - Drag-and-drop 3D Cartesian target handles directly inside the MuJoCo viewer using mouse interactions (`Ctrl + Right-Click Drag`).
-  - Real-time inverse kinematics (Damped Least Squares & Jacobian Transpose) for dual 7-DoF arm manipulation.
-- **5-Layer Super-Safe Kinematic Governor**:
-  - Spherical workspace bounding ($R_{\max} = 34.0\text{ cm}$) preventing physical overextension.
-  - Anti-hyperextension guard ($q_{\text{elbow}} \ge +0.05\text{ rad}$) ensuring natural forward bending.
-  - Slew-rate velocity limiting capped at $1.20\text{ rad/s}$ to eliminate hardware shock.
-  - Zero-jerk initial state synchronization and hardware streaming clutch (`[STANDBY]` mode with spacebar emergency stop).
-- **Motion Recording & Trajectory Engine**:
-  - 50 Hz trajectory recorder capturing all 29 joint positions, velocities, end-effector coordinates, and timestamps.
-  - Standalone player (`play_motion.py`) with cubic spline interpolation for simulation and hardware replay.
-  - Pre-built choreographies (friendly wave gesture, Cartesian circle, and square tracing).
-- **Reinforcement Learning Suite**:
-  - Gymnasium-compliant environments (`g1_arm_rl_env.py`) integrated with Stable-Baselines3 PPO.
-  - Reward structures for precision end-effector reaching, smoothness, and torque minimization.
-- **LiDAR SLAM & Perception**:
-  - Real-time 3D point cloud processing and SLAM with Livox Mid-360 LiDAR sensors.
-  - GStreamer pipelines for low-latency Intel RealSense depth and color video streaming over Jetson hardware.
-- **Hardware DDS Bridge**:
-  - Zero-code-change DDS bridge communicating via Unitree SDK2 `rt/arm_sdk` and `rt/lowcmd` topics.
-
----
-
-## 📁 Repository Architecture
+## Architecture
 
 ```
-Unitree G1/
-├── g1_physics_sim/              # Real-Physics simulation, teleoperation & hardware bridge
-│   ├── g1_constants.py          # Official 29-DoF joint indices, limits & nominal stance
-│   ├── g1_robot.py              # MuJoCo physics engine, FK, Jacobians & PD actuator models
-│   ├── g1_env.py                # Gym environment with 500 Hz physics & 50 Hz control loops
-│   ├── g1_hardware_bridge.py    # Unitree SDK2 DDS bridge (rt/arm_sdk & rt/lowcmd)
-│   ├── g1_trajectory_manager.py # Motion recorder, player & trajectory generator
-│   ├── run_simulation.py        # Interactive 3D viewer with mouse drag & teleoperation
-│   ├── play_motion.py           # Standalone motion replayer for Sim & Physical Hardware
-│   ├── test_robot_connection.py # Non-destructive DDS network diagnostic tool
-│   ├── verify_physics.py        # Automated physics verification suite (5/5 tests passing)
-│   ├── models/g1/               # Clean 29-DoF MuJoCo MJCF XMLs, meshes & materials
-│   └── trajectories/            # Exported motion recordings & demo gestures
-│
-├── unitree_g1_vibes/            # Perception, SLAM, GUI teleoperation & RL pipelines
-│   ├── run_geoff_gui.py         # Full-featured teleoperation GUI & robot monitor
-│   ├── run_geoff_stack.py       # Multi-process stack launcher (SLAM + Video + Control)
-│   ├── live_slam.py             # Livox Mid-360 LiDAR 3D SLAM visualizer
-│   ├── live_points.py           # Raw point cloud streamer and visualizer
-│   ├── livox_python.py          # Livox SDK Python interface
-│   ├── stream_realsense.py      # RealSense camera capture & GStreamer transmitter
-│   ├── receive_realsense_gst.py # GStreamer depth/color video stream receiver
-│   ├── keyboard_controller.py   # Keyboard teleoperation client for locomotion
-│   ├── hanger_boot_sequence.py  # Safe motorized boot & calibration routine
-│   ├── g1_loco_client_example.py# Unitree locomotion API interface examples
-│   └── RL-shenanigans/          # Reinforcement learning experiments
-│       ├── g1_arm_rl_env.py     # Custom Gym reaching environment
-│       ├── train_g1_arm_policy.py# PPO training pipeline using Stable-Baselines3
-│       ├── eval_policy.py       # Policy evaluation benchmarks
-│       └── demo_sim_viewer.py   # Visual demonstration of trained RL policies
-│
-├── LICENSE                      # MIT Open Source License
-├── .gitignore                   # Standard ignore rules (venv, cache, temporary files)
-└── README.md                    # Project documentation
+┌─────────────────────────────────────────────────────────────┐
+│                        Policy                                │
+│  (reset, step, get_observation) - User implemented          │
+└─────────────────────┬───────────────────────────────────────┘
+                      │ G1State / G1Action
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   UnitreeG1Robot                             │
+│  ┌─────────────────────┐    ┌─────────────────────────────┐ │
+│  │  Policy Thread      │    │  Control Thread (500 Hz)    │ │
+│  │  @ policy_rate Hz   │    │  Reads target actions       │ │
+│  │  Calls policy.step()│    │  Publishes to DDS           │ │
+│  └──────────┬──────────┘    └──────────────┬──────────────┘ │
+│             │                                │              │
+│             ▼                                ▼              │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │              G1Bridge (Abstract)                     │   │
+│  │  ┌─────────────────┐         ┌─────────────────┐    │   │
+│  │  │ G1SimBridge     │         │ G1RealHardware  │    │   │
+│  │  │ (MuJoCo)        │         │ Bridge (DDS)    │    │   │
+│  │  └─────────────────┘         └─────────────────┘    │   │
+│  └─────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
 ```
 
----
+## Installation
 
-## 🛠️ Modules Breakdown
-
-### 1. Real-Physics Simulation & Hardware Bridge (`g1_physics_sim`)
-The simulation subsystem models the Unitree G1 EDU robot using MuJoCo with explicit 29-DoF dynamics:
-- **Kinematic Formulation**: Dual 7-DoF arms with full analytical and numerical forward kinematics, Jacobian computation, and nullspace posture projection.
-- **Actuation Models**: Motor PD controller modeled with realistic torque saturation limits (Hip: 88 N·m, Knee: 139 N·m, Arm joints: 25 N·m, Wrist: 5 N·m).
-- **Interactive Teleop**: Users can manipulate end-effectors via keyboard shortcuts or by directly dragging 3D target coordinates with a mouse.
-- **Trajectory Engine**: Real-time 50 Hz trajectory capture and playback across simulation and live DDS robot bridges.
-
-### 2. Vision, SLAM, Teleop & RL Stack (`unitree_g1_vibes`)
-The perception and telemetry subsystem handles real-world sensor streams and locomotion:
-- **Perception Pipeline**: Ingests point clouds from Livox Mid-360 LiDAR via UDP broadcasts, maintaining real-time occupancy and point cloud maps.
-- **Video Streaming**: Hardware-accelerated H.264/RTP streaming using GStreamer for low-latency visual feedback from onboard Jetson computers.
-- **Reinforcement Learning**: Reinforcement learning environment modeling reaching tasks with PPO policies in MuJoCo.
-
----
-
-## 🛡️ Safety & Kinematic Governors
-
-Deploying high-torque humanoid robots requires strict safety constraints to protect both hardware and human operators. The framework incorporates five integrated safety layers:
-
-1. **Spherical Workspace Governor**: Commands outside a radial distance $R_{\max} = 0.34\text{ m}$ from the shoulder pivot are clamped automatically.
-2. **Anti-Hyperextension Guard**: The elbow joint is strictly constrained ($q_{\text{elbow}} \ge +0.05\text{ rad}$) to prevent mechanical lockup or reverse bending.
-3. **Nullspace Posture Projection**: Redundant degrees of freedom utilize nullspace projection $(I - J^\dagger J)$ to preserve a natural human-like rest posture.
-4. **Hardware Slew-Rate Limiter**: Maximum joint velocity is capped at $1.20\text{ rad/s}$ during real-time teleoperation and trajectory playback.
-5. **DDS Streaming Clutch**: Real-world motor streaming starts in `[STANDBY]` mode; pressing `O` engages active hardware streaming, and `Spacebar` acts as an immediate software emergency stop.
-
----
-
-## 🎮 Interactive Controls Reference
-
-When running the interactive simulation viewer (`run_simulation.py`):
-
-| Control | Action | Details |
-| :---: | :---: | :---: |
-| **`Ctrl` + Right-Click Drag** | **Mouse 3D Drag** | Drag target sphere directly with mouse cursor |
-| **`W` / `S`** (or `↑` / `↓`) | Up / Down ($+z / -z$) | Step target up/down in Cartesian space |
-| **`A` / `D`** (or `←` / `→`) | Left / Right ($+y / -y$) | Step target left/right in Cartesian space |
-| **`Q` / `E`** | Forward / Backward ($+x / -x$) | Step target forward/backward |
-| **`M`** | **Record Motion** | Start / Stop recording all 29 motors to JSON |
-| **`P`** | **Play Trajectory** | Replay last recorded motion or loaded trajectory |
-| **`C`** | **Run Choreography** | Execute built-in script (Wave -> Circle -> Square) |
-| **`O`** (or `T`) | **Hardware Clutch** | Toggle live motor streaming to real G1 robot |
-| **`Spacebar`** | **Emergency Stop** | Instantly disengage hardware streaming & pause |
-| **`1`** / **`2`** | Switch Arm | `1` = Left Arm, `2` = Right Arm |
-| **`R`** | Reset Posture | Return arm to nominal safe rest pose |
-| **`]`** / **`[`** | Adjust Step Size | Increase / decrease Cartesian step size |
-| **`Esc`** | Exit | Safely close simulation and DDS channels |
-
----
-
-## 📦 Installation & Quick Start
-
-### Prerequisites
-- Python 3.10+
-- MuJoCo 3.0+
-- NumPy, SciPy, Matplotlib
-- Gymnasium, Stable-Baselines3 (optional, for RL module)
-- PyQt5, Open3D, OpenCV (optional, for GUI and SLAM viewer)
-
-### Setup
+### 1. Core Dependencies
 ```bash
-git clone https://github.com/ShashankJangid/Unitree_G1.git
-cd Unitree_G1
-pip install numpy scipy mujoco gymnasium stable-baselines3
+pip install -r requirements.txt
 ```
 
-### Launch Interactive Simulation
+### 2. Unitree SDK2 Python (Required for real robot)
+```bash
+git clone https://github.com/unitreerobotics/unitree_sdk2_python.git
+cd unitree_sdk2_python
+pip install -e .
+```
+
+### 3. CycloneDDS (Required for DDS communication)
+```bash
+# Option 1: pip (if available)
+pip install cyclonedds
+
+# Option 2: Build from source
+git clone https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.x
+cd cyclonedds && mkdir build install && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=../install
+cmake --build . --target install
+export CYCLONEDDS_HOME=/path/to/cyclonedds/install
+```
+
+### 4. MuJoCo Models
+The framework includes G1 MJCF models in `g1_physics_sim/models/g1/`.
+
+## Quick Start
+
+### Simulation (Safe Development)
 ```bash
 cd g1_physics_sim
+
+# Run ankle swing demo (Unitree's official demo)
+python run_sim.py --policy ankle_swing
+
+# Run wave gesture
+python run_sim.py --policy wave --right-arm
+
+# Interactive Cartesian control
 python run_simulation.py
+
+# Free-standing (no gantry)
+python run_simulation.py --free-standing
 ```
 
-### Replay a Trajectory
+### Real Robot Deployment
 ```bash
-# Playback in MuJoCo simulation
-python play_motion.py trajectories/demo_wave_left.json
+# 1. Connect robot via Ethernet
+# 2. Set PC IP to 192.168.123.x (robot is 192.168.123.99)
+# 3. Find your interface: ifconfig (Linux) or ipconfig (Windows)
+# 4. Robot MUST be suspended from gantry!
+# 5. Wireless controller with E-stop in hand!
 
-# Playback on physical G1 robot via DDS Ethernet interface
-python play_motion.py trajectories/demo_wave_left.json --hardware --iface eth0
+cd g1_physics_sim
+
+# Stand policy (safest first test)
+python run_real.py --policy stand --interface eth0
+
+# Ankle swing (requires gantry)
+python run_real.py --policy ankle_swing --interface eth0
+
+# Wave gesture
+python run_real.py --policy wave --interface eth0 --right-arm
 ```
 
-### Run Automated Physics Verification
+## Configuration
+
+Copy `config.yaml` to `config_local.yaml` and modify:
+
+```yaml
+robot:
+  num_motors: 29              # 29 (body) or 43 (body + Dex3 hands)
+  fix_base: true
+  enable_elastic_band: true
+
+dds:
+  domain_sim: 1
+  domain_real: 0
+  interface_sim: "lo"
+  interface_real: "Ethernet"   # Your ethernet interface
+
+control:
+  physics_freq: 500
+  policy_freq: 50
+
+safety:
+  max_joint_velocity: 1.2
+  fall_height_threshold: 0.45
+```
+
+## Writing Custom Policies
+
+```python
+from g1_policy import Policy
+from g1_state import G1State, G1Action, G1Observation
+import numpy as np
+
+class MyCustomPolicy(Policy):
+    def __init__(self, my_param: float = 1.0):
+        self.my_param = my_param
+
+    def reset(self, state: G1State) -> None:
+        """Called at episode start"""
+        pass
+
+    def step(self, state: G1State) -> G1Action:
+        """Compute action at policy rate (e.g., 50 Hz)"""
+        action = G1Action.zero(num_body=29)
+        action.q_des[:] = state.q  # Hold current position
+        action.kp[:] = 60.0
+        action.kd[:] = 1.5
+        action.enable_arm_sdk = True
+        return action
+
+    def get_observation(self, state: G1State) -> G1Observation:
+        """For logging/debugging"""
+        return G1Observation(
+            timestamp=state.timestamp,
+            joint_pos=state.q,
+            joint_vel=state.dq,
+            # ...
+        )
+
+    @property
+    def action_dim(self) -> int:
+        return 29
+
+    @property
+    def obs_dim(self) -> int:
+        return 24  # Your observation dimension
+```
+
+Run your policy:
+```python
+from g1_policy import run_policy
+from my_policy import MyCustomPolicy
+
+policy = MyCustomPolicy(my_param=0.5)
+robot = run_policy(policy, mode="sim", duration=10.0)
+```
+
+## Key Classes
+
+### G1State
+Complete robot state including joint positions, velocities, torques, base pose, IMU, foot contacts, and hand poses.
+
+### G1Action
+Robot action with joint position/velocity/torque targets, PD gains, and motor modes.
+
+### G1Bridge / G1SimBridge / G1RealHardwareBridge
+Abstract interface for sim/real robot communication. Hardware bridge handles:
+- DDS publisher/subscriber for LowCmd/LowState
+- MotionSwitcherClient for service management
+- CRC calculation for message integrity
+- Two-thread architecture (500Hz control + policy rate)
+
+### UnitreeG1Robot
+Main entry point. Handles policy execution, safety monitoring, and sim/real abstraction.
+
+## Trajectory Recording
+
+```python
+from g1_trajectory_manager import TrajectoryRecorder, TrajectoryPlayer
+from g1_state import G1State, G1Action
+
+recorder = TrajectoryRecorder()
+recorder.start()
+
+# During control loop:
+state = robot.get_state()
+action = policy.step(state)
+recorder.record_state(state, action, target_pos)
+
+# Save
+path = recorder.stop_and_save("my_motion.json")
+
+# Playback
+player = TrajectoryPlayer(path)
+player.start_playback(loop=False)
+action, done = player.get_action()
+```
+
+## Safety Checklist (Real Robot)
+
+Before running on hardware:
+- [ ] Robot suspended from certified gantry/strap
+- [ ] Wireless controller paired and E-stop tested
+- [ ] Clear 2m radius around robot
+- [ ] Battery > 50%
+- [ ] Correct network interface specified
+- [ ] DDS domain = 0 (real robot default)
+- [ ] Start with `--num-motors 29` (body only)
+- [ ] Test `stand` policy first
+- [ ] Have colleague ready with E-stop
+
+## Sim-to-Real Tips
+
+1. **Use Domain 1 for Sim**: Prevents accidental commands to real robot
+2. **Match PD Gains**: Use same KP/KD in sim and real
+3. **Arm SDK Enable**: Joint index 29 (`kNotUsedJoint`) must be set to 1.0
+4. **Release Motion Mode**: Always call `release_motion_mode()` before low-level control
+5. **CRC Required**: Real robot requires valid CRC on LowCmd messages
+6. **Velocity Clamping**: Hardware bridge clamps joint velocity to 1.2 rad/s
+
+## Directory Structure
+
+```
+g1_physics_sim/
+├── __init__.py              # Package exports
+├── config.yaml              # Default configuration
+├── config_local.yaml        # Local overrides (gitignored)
+├── config_loader.py         # Configuration management
+├── g1_constants.py          # Joint indices, gains, limits, DDS topics
+├── g1_robot.py              # MuJoCo robot model
+├── g1_hardware_bridge.py    # Sim/Real bridge implementations
+├── g1_state.py              # State/Action/Observation dataclasses
+├── g1_policy.py             # Policy interface + robot runner
+├── g1_policies.py           # Example policies
+├── g1_trajectory_manager.py # Recording/playback utilities
+├── g1_env.py                # Gymnasium RL environments
+├── run_sim.py               # Simple policy runner (sim)
+├── run_real.py              # Real robot deployment script
+├── run_simulation.py        # Interactive Cartesian control
+├── requirements.txt         # Python dependencies
+└── models/g1/               # MJCF models and meshes
+```
+
+## RL Training
+
 ```bash
-python verify_physics.py
+cd unitree_g1_vibes/RL-shenanigans
+python train_g1_arm_policy.py --algo ppo --total-steps 1000000
 ```
 
----
+## Resources
 
-## 🔬 Physics Verification
+- [Unitree G1 SDK Documentation](https://support.unitree.com/home/en/G1_developer/get_sdk)
+- [Unitree MuJoCo Simulator](https://github.com/unitreerobotics/unitree_mujoco)
+- [Unitree SDK2 Python](https://github.com/unitreerobotics/unitree_sdk2_python)
+- [G1-Playground (AlexandreBrown)](https://github.com/AlexandreBrown/G1-Playground)
+- [G1 Deploy Python (TheoBounac)](https://github.com/TheoBounac/G1_deploy_python)
 
-The automated verification suite (`verify_physics.py`) asserts model integrity against 5 rigorous benchmarks:
-- **Model Compilation**: Compiles 29 actuators and 35 system DoFs without collision or constraint errors.
-- **Torque Limit Saturation**: Confirms computed motor torques strictly adhere to official torque limits under full gravitational loading.
-- **Sub-Millimeter Convergence**: Validates that Cartesian reaching tasks achieve $< 1\text{ mm}$ terminal position error across random reachable coordinates.
-- **Out-of-Reach Saturation**: Ensures out-of-reach Cartesian targets are safely clamped to the $34\text{ cm}$ spherical boundary.
-- **Elbow Non-Inversion**: Verifies the elbow angle remains strictly positive ($q > 0$) without hyperextension under all reaching conditions.
+## License
 
----
+MIT License - See LICENSE file for details.
 
-## 📄 License
+## Citation
 
-This project is licensed under the [MIT License](LICENSE) - see the LICENSE file for details.
+If you use this framework in research, please cite:
+```
+@software{unitree_g1_framework,
+  title = {Unitree G1 Sim-to-Real Robotics Framework},
+  author = {Shashank},
+  year = {2026},
+  url = {https://github.com/...}
+}
+```

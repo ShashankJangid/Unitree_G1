@@ -3,7 +3,7 @@ import sys
 import time
 import socket
 import numpy as np
-from g1_constants import JOINT_NAMES_29DOF, NUM_MOTORS
+from g1_constants import JOINT_NAMES_29DOF, NUM_BODY_MOTORS, NUM_MOTORS
 
 def list_local_network_interfaces():
     print('=' * 65)

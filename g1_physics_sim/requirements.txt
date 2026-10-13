@@ -1,0 +1,30 @@
+# Unitree G1 Physics Simulation & Real Robot Control
+# Core dependencies
+numpy>=1.24.0
+mujoco>=3.2.0
+gymnasium>=0.29.0
+
+# Unitree SDK (install from source)
+# git clone https://github.com/unitreerobotics/unitree_sdk2_python.git
+# cd unitree_sdk2_python && pip install -e .
+
+# RL dependencies (optional)
+stable-baselines3>=2.0.0
+torch>=2.0.0
+onnxruntime>=1.16.0
+
+# Configuration
+pyyaml>=6.0
+
+# Visualization (optional)
+matplotlib>=3.7.0
+open3d>=0.18.0
+
+# Data processing
+scipy>=1.11.0
+
+# Development
+pytest>=7.4.0
+black>=23.0.0
+isort>=5.12.0
+mypy>=1.5.0

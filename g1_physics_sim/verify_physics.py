@@ -1,5 +1,5 @@
 import numpy as np
-from g1_constants import NOMINAL_STAND_Q, NUM_MOTORS, TORQUE_LIMITS
+from g1_constants import NOMINAL_STAND_Q, NUM_BODY_MOTORS, TORQUE_LIMITS
 from g1_robot import G1Robot
 from run_simulation import G1CartesianController
 
@@ -9,12 +9,12 @@ def run_physics_verification():
     print('=' * 65)
     print('\n[Test 1] Initializing 29-DoF Robot & Model...')
     robot = G1Robot(fix_base=True)
-    assert robot.model.nu == NUM_MOTORS, f'Expected {NUM_MOTORS} actuators, found {robot.model.nu}'
-    print(f'  Passed: Model compiled with {NUM_MOTORS} actuators and {robot.model.nv} DoFs.')
+    assert robot.model.nu == NUM_BODY_MOTORS, f'Expected {NUM_BODY_MOTORS} actuators, found {robot.model.nu}'
+    print(f'  Passed: Model compiled with {NUM_BODY_MOTORS} actuators and {robot.model.nv} DoFs.')
     print('\n[Test 2] Testing Gravity & Motor PD Torque Limits...')
     torques = robot.compute_pd_torques(NOMINAL_STAND_Q)
     assert not np.any(np.isnan(torques)), 'Torques contain NaN!'
-    assert np.all(np.abs(torques) <= TORQUE_LIMITS), 'Torques exceeded physical hardware limits!'
+    assert np.all(np.abs(torques) <= TORQUE_LIMITS[:NUM_BODY_MOTORS]), 'Torques exceeded physical hardware limits!'
     print(f'  Passed: Computed motor torques cleanly within [-TORQUE_LIMITS, +TORQUE_LIMITS].')
     print('\n[Test 3] Testing Cartesian Reaching Convergence...')
     controller = G1CartesianController(robot, right_arm=False)
