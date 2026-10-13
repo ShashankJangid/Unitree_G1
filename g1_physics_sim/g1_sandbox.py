@@ -170,6 +170,7 @@ def print_sandbox_help():
 |    '6'           : Control LEFT LEG (W/S Hip Pitch, A/D Hip Roll, Q/E Knee & Ankle)   |
 |    '7'           : Control RIGHT LEG (W/S Hip Pitch, A/D Hip Roll, Q/E Knee & Ankle)  |
 |    '8'           : Control TORSO TWIST & WHOLE-BODY ARTICULATION (W/S/A/D/Q/E)        |
+|    '9'           : Toggle AUTONOMOUS ACT NEURAL POLICY (Learned Pick & Place)         |
 |                                                                                      |
 |  [3D CARTESIAN & KEYBOARD NUDGING]                                                   |
 |    Ctrl + RClick : Mouse 3D Drag & Drop Target Sphere anywhere in space              |
@@ -322,13 +323,15 @@ def simulate_g1(
     active_mode = "ARM"
     squat_elevation = 0.793
     last_saved_traj: Optional[pathlib.Path] = None
+    act_runner = None
+    act_active = False
 
 
     print_sandbox_help()
 
 
     def process_key(k: str):
-        nonlocal target_pos, step_size, active_mode, squat_elevation, player, active_script_pts, script_pt_idx, last_saved_traj
+        nonlocal target_pos, step_size, active_mode, squat_elevation, player, active_script_pts, script_pt_idx, last_saved_traj, act_runner, act_active
         k = k.lower()
 
         if k == 'h':
@@ -397,6 +400,26 @@ def simulate_g1(
         elif k == '8':
             active_mode = "TORSO_TWIST"
             print('\n[MODE 8] Controlling TORSO TWIST & WHOLE-BODY ARTICULATION.')
+
+        elif k == '9':
+            if not act_active:
+                if act_runner is None:
+                    try:
+                        from g1_act_trainer import G1ACTAutonomousRunner
+                        weights = base_dir / "models" / "g1_act" / "act_policy_weights.pt"
+                        if weights.exists():
+                            act_runner = G1ACTAutonomousRunner(str(weights))
+                            print(f'\n[ACT POLICY] Loaded neural weights: {weights.name}')
+                        else:
+                            print(f'\n[ACT POLICY] No weights found at {weights}. Train first with g1_act_trainer.py --train')
+                    except Exception as ex:
+                        print(f'\n[ACT POLICY] Error loading model: {ex}')
+                if act_runner is not None:
+                    act_active = True
+                    print('\n[ACT POLICY] >>> AUTONOMOUS ACT NEURAL POLICY ENGAGED! Press 9 to stop. <<<')
+            else:
+                act_active = False
+                print('\n[ACT POLICY] >>> Autonomous policy disengaged. Reverted to teleop. <<<')
 
         elif k in ('w', 'up'):
             if active_mode == "ARM":
@@ -595,7 +618,7 @@ def simulate_g1(
     last_print_time = time.time()
 
     def run_simulation_step():
-        nonlocal step_idx, target_pos, last_mocap_pos, active_script_pts, script_pt_idx, last_hw_time, last_print_time
+        nonlocal step_idx, target_pos, last_mocap_pos, active_script_pts, script_pt_idx, last_hw_time, last_print_time, act_runner, act_active
         step_start = time.time()
         step_idx += 1
         check_console()
@@ -608,7 +631,10 @@ def simulate_g1(
 
 
         is_playing_motion = False
-        if player and player.is_playing:
+        if act_active and act_runner is not None:
+            controller.target_q[:] = act_runner.query_action(controller.target_q)[:NUM_BODY_MOTORS]
+            is_playing_motion = True
+        elif player and player.is_playing:
             q_frame, _, _, _, is_done = player.get_frame()
             if q_frame is not None:
                 controller.target_q[:] = q_frame[:NUM_BODY_MOTORS]
