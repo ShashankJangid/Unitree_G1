@@ -61,11 +61,17 @@ from g1_constants import (
     WAIST_ROLL,
     WAIST_PITCH,
     L_LEG_HIP_PITCH,
+    L_LEG_HIP_ROLL,
+    L_LEG_HIP_YAW,
     L_LEG_KNEE,
     L_LEG_ANKLE_PITCH,
+    L_LEG_ANKLE_ROLL,
     R_LEG_HIP_PITCH,
+    R_LEG_HIP_ROLL,
+    R_LEG_HIP_YAW,
     R_LEG_KNEE,
     R_LEG_ANKLE_PITCH,
+    R_LEG_ANKLE_ROLL,
     ARM_SDK_WEIGHT_INDEX,
 )
 from g1_robot import G1Robot
@@ -155,14 +161,17 @@ def print_sandbox_help():
 +--------------------------------------------------------------------------------------+
 |                     UNITREE G1 EDU - INTERACTIVE SANDBOX COMMANDS                    |
 +--------------------------------------------------------------------------------------+
-|  [MODES & ARMS]                                                                      |
-|    '1'           : Select LEFT Arm for Cartesian Reaching                            |
-|    '2'           : Select RIGHT Arm for Cartesian Reaching                           |
-|    '3'           : Toggle WAIST Articulation (Yaw, Pitch, Roll)                      |
-|    '4'           : Toggle SQUAT & Stand Height Control (Pelvis elevation)            |
-|    '5' or 'C'    : Cycle Choreography Gestures (Wave, Circle, Square, Punch, Bow)    |
+|  [MODES & HUMANOID CONTROL]                                                          |
+|    '1'           : Select LEFT Arm for Cartesian Reaching (W/S/A/D/Q/E)               |
+|    '2'           : Select RIGHT Arm for Cartesian Reaching (W/S/A/D/Q/E)              |
+|    '3'           : Toggle WAIST Articulation (W/S Pitch, A/D Yaw, Q/E Roll)           |
+|    '4'           : Toggle SQUAT & Stand Height Control (W/S Up/Down)                  |
+|    '5' or 'C'    : Cycle Choreography Gestures (Wave, Circle, Square, Punch, Bow)     |
+|    '6'           : Control LEFT LEG (W/S Hip Pitch, A/D Hip Roll, Q/E Knee & Ankle)   |
+|    '7'           : Control RIGHT LEG (W/S Hip Pitch, A/D Hip Roll, Q/E Knee & Ankle)  |
+|    '8'           : Control TORSO TWIST & WHOLE-BODY ARTICULATION (W/S/A/D/Q/E)        |
 |                                                                                      |
-|  [3D CARTESIAN & JOINT NUDGING]                                                      |
+|  [3D CARTESIAN & KEYBOARD NUDGING]                                                   |
 |    Ctrl + RClick : Mouse 3D Drag & Drop Target Sphere anywhere in space              |
 |    'W' / 'S'     : Nudge Z-Axis (Up / Down)                                          |
 |    'A' / 'D'     : Nudge Y-Axis (Left / Right)                                       |
@@ -377,6 +386,18 @@ def simulate_g1(
             player.start_playback(loop=False)
 
 
+        elif k == '6':
+            active_mode = "LEFT_LEG"
+            print('\n[MODE 6] Controlling LEFT LEG (W/S Hip Pitch, A/D Hip Roll, Q/E Knee & Ankle).')
+
+        elif k == '7':
+            active_mode = "RIGHT_LEG"
+            print('\n[MODE 7] Controlling RIGHT LEG (W/S Hip Pitch, A/D Hip Roll, Q/E Knee & Ankle).')
+
+        elif k == '8':
+            active_mode = "TORSO_TWIST"
+            print('\n[MODE 8] Controlling TORSO TWIST & WHOLE-BODY ARTICULATION.')
+
         elif k in ('w', 'up'):
             if active_mode == "ARM":
                 target_pos[2] += step_size
@@ -385,6 +406,12 @@ def simulate_g1(
             elif active_mode == "SQUAT":
                 squat_elevation = min(0.85, squat_elevation + 0.02)
                 robot.data.qpos[2] = squat_elevation
+            elif active_mode == "LEFT_LEG":
+                controller.target_q[L_LEG_HIP_PITCH] = np.clip(controller.target_q[L_LEG_HIP_PITCH] + 0.05, -1.0, 1.0)
+            elif active_mode == "RIGHT_LEG":
+                controller.target_q[R_LEG_HIP_PITCH] = np.clip(controller.target_q[R_LEG_HIP_PITCH] + 0.05, -1.0, 1.0)
+            elif active_mode == "TORSO_TWIST":
+                controller.target_q[WAIST_PITCH] = np.clip(controller.target_q[WAIST_PITCH] + 0.05, -0.4, 0.6)
 
         elif k in ('s', 'down'):
             if active_mode == "ARM":
@@ -402,11 +429,23 @@ def simulate_g1(
                 controller.target_q[R_LEG_HIP_PITCH] = -0.5 * bend
                 controller.target_q[L_LEG_ANKLE_PITCH] = -0.5 * bend
                 controller.target_q[R_LEG_ANKLE_PITCH] = -0.5 * bend
+            elif active_mode == "LEFT_LEG":
+                controller.target_q[L_LEG_HIP_PITCH] = np.clip(controller.target_q[L_LEG_HIP_PITCH] - 0.05, -1.0, 1.0)
+            elif active_mode == "RIGHT_LEG":
+                controller.target_q[R_LEG_HIP_PITCH] = np.clip(controller.target_q[R_LEG_HIP_PITCH] - 0.05, -1.0, 1.0)
+            elif active_mode == "TORSO_TWIST":
+                controller.target_q[WAIST_PITCH] = np.clip(controller.target_q[WAIST_PITCH] - 0.05, -0.4, 0.6)
 
         elif k in ('a', 'left'):
             if active_mode == "ARM":
                 target_pos[1] += step_size
             elif active_mode == "WAIST":
+                controller.target_q[WAIST_YAW] = np.clip(controller.target_q[WAIST_YAW] + 0.08, -1.2, 1.2)
+            elif active_mode == "LEFT_LEG":
+                controller.target_q[L_LEG_HIP_ROLL] = np.clip(controller.target_q[L_LEG_HIP_ROLL] + 0.05, -0.4, 0.4)
+            elif active_mode == "RIGHT_LEG":
+                controller.target_q[R_LEG_HIP_ROLL] = np.clip(controller.target_q[R_LEG_HIP_ROLL] + 0.05, -0.4, 0.4)
+            elif active_mode == "TORSO_TWIST":
                 controller.target_q[WAIST_YAW] = np.clip(controller.target_q[WAIST_YAW] + 0.08, -1.2, 1.2)
 
         elif k in ('d', 'right'):
@@ -414,17 +453,39 @@ def simulate_g1(
                 target_pos[1] -= step_size
             elif active_mode == "WAIST":
                 controller.target_q[WAIST_YAW] = np.clip(controller.target_q[WAIST_YAW] - 0.08, -1.2, 1.2)
+            elif active_mode == "LEFT_LEG":
+                controller.target_q[L_LEG_HIP_ROLL] = np.clip(controller.target_q[L_LEG_HIP_ROLL] - 0.05, -0.4, 0.4)
+            elif active_mode == "RIGHT_LEG":
+                controller.target_q[R_LEG_HIP_ROLL] = np.clip(controller.target_q[R_LEG_HIP_ROLL] - 0.05, -0.4, 0.4)
+            elif active_mode == "TORSO_TWIST":
+                controller.target_q[WAIST_YAW] = np.clip(controller.target_q[WAIST_YAW] - 0.08, -1.2, 1.2)
 
         elif k == 'q':
             if active_mode == "ARM":
                 target_pos[0] += step_size
             elif active_mode == "WAIST":
                 controller.target_q[WAIST_ROLL] = np.clip(controller.target_q[WAIST_ROLL] + 0.05, -0.4, 0.4)
+            elif active_mode == "LEFT_LEG":
+                controller.target_q[L_LEG_KNEE] = np.clip(controller.target_q[L_LEG_KNEE] + 0.06, 0.0, 1.8)
+                controller.target_q[L_LEG_ANKLE_PITCH] = -0.5 * controller.target_q[L_LEG_KNEE]
+            elif active_mode == "RIGHT_LEG":
+                controller.target_q[R_LEG_KNEE] = np.clip(controller.target_q[R_LEG_KNEE] + 0.06, 0.0, 1.8)
+                controller.target_q[R_LEG_ANKLE_PITCH] = -0.5 * controller.target_q[R_LEG_KNEE]
+            elif active_mode == "TORSO_TWIST":
+                controller.target_q[WAIST_ROLL] = np.clip(controller.target_q[WAIST_ROLL] + 0.05, -0.4, 0.4)
 
         elif k == 'e':
             if active_mode == "ARM":
                 target_pos[0] -= step_size
             elif active_mode == "WAIST":
+                controller.target_q[WAIST_ROLL] = np.clip(controller.target_q[WAIST_ROLL] - 0.05, -0.4, 0.4)
+            elif active_mode == "LEFT_LEG":
+                controller.target_q[L_LEG_KNEE] = np.clip(controller.target_q[L_LEG_KNEE] - 0.06, 0.0, 1.8)
+                controller.target_q[L_LEG_ANKLE_PITCH] = -0.5 * controller.target_q[L_LEG_KNEE]
+            elif active_mode == "RIGHT_LEG":
+                controller.target_q[R_LEG_KNEE] = np.clip(controller.target_q[R_LEG_KNEE] - 0.06, 0.0, 1.8)
+                controller.target_q[R_LEG_ANKLE_PITCH] = -0.5 * controller.target_q[R_LEG_KNEE]
+            elif active_mode == "TORSO_TWIST":
                 controller.target_q[WAIST_ROLL] = np.clip(controller.target_q[WAIST_ROLL] - 0.05, -0.4, 0.4)
 
 
