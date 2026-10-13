@@ -773,10 +773,11 @@ def main():
     parser.add_argument("--record", help="Filename to record session")
     parser.add_argument("--loop", action="store_true", help="Loop playback continuously")
     parser.add_argument("--duration", type=float, default=0.0, help="Run duration in seconds (0=infinite)")
+    parser.add_argument("--headless", action="store_true", help="Run in headless mode without GUI viewer")
     args = parser.parse_args()
 
     simulate_g1(
-        mode="interactive",
+        mode="headless" if args.headless else "interactive",
         script=args.script,
         trajectory_file=args.play,
         right_arm=args.right_arm,
@@ -786,6 +787,7 @@ def main():
         record=args.record,
         loop=args.loop,
         duration=args.duration,
+        headless=args.headless,
     )
 
 
