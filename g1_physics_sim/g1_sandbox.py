@@ -228,6 +228,8 @@ def print_sandbox_help():
 |    '7'           : Control RIGHT LEG (W/S Hip Pitch, A/D Hip Roll, Q/E Knee & Ankle)  |
 |    '8'           : Control TORSO TWIST & WHOLE-BODY ARTICULATION (W/S/A/D/Q/E)        |
 |    '9'           : Toggle AUTONOMOUS ACT NEURAL POLICY (Learned Pick & Place)         |
+|    'J'           : Trigger Official G1 Arm Actions (Salute, Hug, Kiss, Clap, Wave)    |
+|    'K'           : Toggle Official Hand Grip (G1 Hand SDK Torque Close / Open)        |
 |                                                                                      |
 |  [3D CARTESIAN & KEYBOARD NUDGING]                                                   |
 |    Ctrl + RClick : Mouse 3D Drag & Drop Target Sphere anywhere in space              |
@@ -564,6 +566,30 @@ def simulate_g1(
             is_part = robot.toggle_plane_type()
             p_desc = "PARTITION PLANE (Checkerboard)" if is_part else "NORMAL PLANE (Solid Floor)"
             print(f'\n[ENVIRONMENT] Ground plane changed to: {p_desc}')
+
+        elif k == 'j':
+            official_actions = [
+                ("right hand wave", [0.4, 0.4, 0.2, 0.8, 0.0, 0.0, 0.0]),
+                ("right hand salute", [0.8, -0.2, 0.3, 1.4, 0.0, 0.0, 0.0]),
+                ("hands up", [1.2, 0.0, 0.0, 0.2, 0.0, 0.0, 0.0]),
+                ("hug", [0.4, 0.6, 0.0, 1.2, 0.0, 0.0, 0.0]),
+                ("cross arms", [0.5, 0.3, 0.2, 1.5, 0.0, 0.0, 0.0]),
+            ]
+            act_idx = getattr(process_key, '_act_idx', 0)
+            a_name, a_q = official_actions[act_idx % len(official_actions)]
+            process_key._act_idx = act_idx + 1
+            print(f'\n[OFFICIAL ACTION] >>> Executing: {a_name.upper()} <<<')
+            controller.target_q[RIGHT_ARM_JOINTS] = a_q
+            if "both" in a_name or a_name in ("hands up", "hug", "cross arms"):
+                controller.target_q[LEFT_ARM_JOINTS] = [a_q[0], -a_q[1], -a_q[2], a_q[3], -a_q[4], a_q[5], -a_q[6]]
+
+        elif k == 'k':
+            grip_state = getattr(process_key, '_grip_closed', False)
+            grip_state = not grip_state
+            process_key._grip_closed = grip_state
+            tau = 0.3 if grip_state else -0.3
+            state_str = "CLOSED (tau = +0.3 Nm)" if grip_state else "OPEN (tau = -0.3 Nm)"
+            print(f'\n[HAND SDK] Hand Grip: {state_str}')
 
 
         elif k == 'm':
