@@ -8,6 +8,8 @@ try:  # package and flat-script imports both work
     NOMINAL_STAND_Q, ZERO_POSE_Q, NUM_BODY_MOTORS, TORQUE_LIMITS,
     L_WRIST_YAW, R_WRIST_YAW, ARM_SDK_ENABLE, LEG_JOINTS,
     LEFT_ARM_JOINTS, RIGHT_ARM_JOINTS, WAIST_JOINTS,
+    L_ANKLE_PITCH, R_ANKLE_PITCH, L_ANKLE_ROLL, R_ANKLE_ROLL,
+    L_HIP_PITCH, R_HIP_PITCH, L_HIP_ROLL, R_HIP_ROLL,
     JOINT_LIMITS_MIN, JOINT_LIMITS_MAX,
     ELASTIC_BAND_HEIGHT, MODE_PR, MODE_AB,
     SELF_COLLISION_DIST, PHYSICS_DT)
@@ -16,6 +18,8 @@ except ImportError:  # pragma: no cover - flat script layout
 NOMINAL_STAND_Q, ZERO_POSE_Q, NUM_BODY_MOTORS, TORQUE_LIMITS,
 L_WRIST_YAW, R_WRIST_YAW, ARM_SDK_ENABLE, LEG_JOINTS,
 LEFT_ARM_JOINTS, RIGHT_ARM_JOINTS, WAIST_JOINTS,
+L_ANKLE_PITCH, R_ANKLE_PITCH, L_ANKLE_ROLL, R_ANKLE_ROLL,
+L_HIP_PITCH, R_HIP_PITCH, L_HIP_ROLL, R_HIP_ROLL,
 JOINT_LIMITS_MIN, JOINT_LIMITS_MAX,
 ELASTIC_BAND_HEIGHT, MODE_PR, MODE_AB,
 SELF_COLLISION_DIST, PHYSICS_DT)
@@ -105,6 +109,9 @@ class G1Robot:
         for idx in LEFT_ARM_JOINTS + RIGHT_ARM_JOINTS:
             self.kp[idx] = 120.0
             self.kd[idx] = 3.0
+        for idx in LEG_JOINTS:
+            self.kp[idx] = 220.0
+            self.kd[idx] = 10.0
 
         self.foot_gids = set()
         self.floor_gid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, 'ground_floor')
@@ -164,7 +171,8 @@ class G1Robot:
 
     def reset(self, initial_q: Optional[np.ndarray] = None):
         mujoco.mj_resetData(self.model, self.data)
-        self.data.qpos[0:3] = [0.0, 0.0, self.elastic_band_height if self.elastic_band_active else 0.793]
+        init_z = 0.793 if self.fix_base else 0.77417
+        self.data.qpos[0:3] = [0.0, 0.0, init_z]
         self.data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
 
         q_des = initial_q if initial_q is not None else NOMINAL_STAND_Q[:self.num_motors]
@@ -280,7 +288,24 @@ class G1Robot:
         dq_des: Optional[np.ndarray] = None,
         tau_ff: Optional[np.ndarray] = None
     ) -> np.ndarray:
-        torques = self.compute_pd_torques(q_des, dq_des, tau_ff)
+        cmd = np.array(q_des, dtype=np.float32)[:self.num_motors].copy()
+        if not self.fix_base and self.pelvis_bid != -1:
+            com = self.data.subtree_com[self.pelvis_bid]
+            com_x, com_y = float(com[0]), float(com[1])
+            com_vx = float(self.data.qvel[0]) if len(self.data.qvel) > 0 else 0.0
+            com_vy = float(self.data.qvel[1]) if len(self.data.qvel) > 1 else 0.0
+            pitch_trim = 1.4 * (com_x - 0.042) + 0.18 * com_vx
+            roll_trim = 1.0 * com_y + 0.12 * com_vy
+            cmd[L_ANKLE_PITCH] += pitch_trim
+            cmd[R_ANKLE_PITCH] += pitch_trim
+            cmd[L_HIP_PITCH] -= 0.5 * pitch_trim
+            cmd[R_HIP_PITCH] -= 0.5 * pitch_trim
+            cmd[L_ANKLE_ROLL] += roll_trim
+            cmd[R_ANKLE_ROLL] += roll_trim
+            cmd[L_HIP_ROLL] -= 0.5 * roll_trim
+            cmd[R_HIP_ROLL] -= 0.5 * roll_trim
+
+        torques = self.compute_pd_torques(cmd, dq_des, tau_ff)
 
         for i in range(self.num_motors):
             aid = self._actuator_id[i]

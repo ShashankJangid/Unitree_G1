@@ -240,6 +240,7 @@ def print_sandbox_help():
 |    'R'           : Reset Robot to Nominal Safe Stand                                 |
 |                                                                                      |
 |  [PHYSICS & PERTURBATION]                                                            |
+|    'B'           : Toggle Dynamic Ground Balance / Suspended Gantry Harness           |
 |    'F'           : Apply Physical Push Force to Torso (Test Balance & Compliance)    |
 |    'G'           : Change Ground Plane (Toggle Partition Checkerboard / Normal Plane)|
 |                                                                                      |
@@ -556,6 +557,13 @@ def simulate_g1(
             elif active_mode == "TORSO_TWIST":
                 controller.target_q[WAIST_ROLL] = np.clip(controller.target_q[WAIST_ROLL] - 0.05, -0.4, 0.4)
 
+
+        elif k == 'b':
+            robot.fix_base = not robot.fix_base
+            mode_desc = "SUSPENDED GANTRY HARNESS (Safe Anchored)" if robot.fix_base else "FREE-STANDING GROUND BALANCE (Active ZMP)"
+            if not robot.fix_base:
+                robot.data.qpos[2] = 0.77417
+            print(f'\n[BALANCE MODE] Base Support Mode: {mode_desc}')
 
         elif k == 'f':
 
