@@ -118,28 +118,28 @@ class G1CartesianController:
         safe_goal = shoulder_pos + vec
         return (safe_goal, was_clamped)
 
-    def step_ik(self, raw_goal: np.ndarray, damping: float = 0.0005, cart_gain: float = 0.5, nullspace_gain: float = 0.05) -> Tuple[np.ndarray, bool]:
+    def step_ik(self, raw_goal: np.ndarray, damping: float = 0.0001, cart_gain: float = 0.8, nullspace_gain: float = 0.02) -> Tuple[np.ndarray, bool]:
         safe_goal, was_clamped = self.clamp_to_safe_workspace(raw_goal)
         arm_dofs = [self.robot._dof_adr[i] for i in self.arm_indices]
         q_cur_arm = self.target_q[self.arm_indices].copy()
 
-        for _ in range(8):
+        for _ in range(20):
             cur_p = self.robot.get_hand_pos(self.right_arm)
             err = safe_goal - cur_p
-            if np.linalg.norm(err) < 0.0003:
+            if np.linalg.norm(err) < 0.0001:
                 break
             jacp = np.zeros((3, self.robot.model.nv))
             mujoco.mj_jacBody(self.robot.model, self.robot.data, jacp, None, self.ee_bid)
             J_arm = jacp[:, arm_dofs]
             JJT = J_arm @ J_arm.T + (damping ** 2) * np.eye(3)
             J_pinv = J_arm.T @ np.linalg.solve(JJT, np.eye(3))
-            dx = np.clip(err * cart_gain, -0.05, 0.05)
+            dx = np.clip(err * cart_gain, -0.08, 0.08)
             dq_task = J_pinv @ dx
             N = np.eye(7) - J_pinv @ J_arm
             q_nom_arm = NOMINAL_STAND_Q[self.arm_indices]
             dq_null_desired = nullspace_gain * (q_nom_arm - q_cur_arm)
             dq_null = N @ dq_null_desired
-            dq_total = np.clip(dq_task + dq_null, -0.06, 0.06)
+            dq_total = np.clip(dq_task + dq_null, -0.08, 0.08)
             q_cur_arm = q_cur_arm + dq_total
             safe_min = self.joint_limits_min[self.arm_indices] + 0.02
             safe_max = self.joint_limits_max[self.arm_indices] - 0.02

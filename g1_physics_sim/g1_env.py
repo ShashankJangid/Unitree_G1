@@ -9,12 +9,14 @@ try:  # package and flat-script imports both work
     from .g1_constants import (    OFFICIAL_KP, OFFICIAL_KD, NOMINAL_STAND_Q, NUM_BODY_MOTORS,
     L_SHOULDER_PITCH, L_WRIST_YAW, R_SHOULDER_PITCH, R_WRIST_YAW,
     LEFT_ARM_JOINTS, RIGHT_ARM_JOINTS, LEG_JOINTS, WAIST_JOINTS,
-    JOINT_LIMITS_MIN, JOINT_LIMITS_MAX)
+    JOINT_LIMITS_MIN, JOINT_LIMITS_MAX,
+    FALL_HEIGHT_THRESHOLD)
 except ImportError:  # pragma: no cover - flat script layout
     from g1_constants import (OFFICIAL_KP, OFFICIAL_KD, NOMINAL_STAND_Q, NUM_BODY_MOTORS,
 L_SHOULDER_PITCH, L_WRIST_YAW, R_SHOULDER_PITCH, R_WRIST_YAW,
 LEFT_ARM_JOINTS, RIGHT_ARM_JOINTS, LEG_JOINTS, WAIST_JOINTS,
-JOINT_LIMITS_MIN, JOINT_LIMITS_MAX)
+JOINT_LIMITS_MIN, JOINT_LIMITS_MAX,
+    FALL_HEIGHT_THRESHOLD)
 try:  # package and flat-script imports both work
     from .g1_robot import (    G1Robot)
 except ImportError:  # pragma: no cover - flat script layout
@@ -46,7 +48,7 @@ class G1PhysicsEnv(gym.Env):
         self.target_type = target_type
         self.max_episode_steps = max_episode_steps
 
-        self.robot = G1Robot(fix_base=self.fix_base, num_motors=self.num_motors)
+        self.robot = G1Robot(fix_base=self.fix_base)
 
         if right_arm:
             self.arm_indices = RIGHT_ARM_JOINTS
@@ -169,7 +171,7 @@ class G1PhysicsEnv(gym.Env):
         truncated = self.step_count >= self.max_episode_steps
 
         base_pos, _ = self.robot.get_base_pose()
-        if not self.fix_base and base_pos[2] < 0.45:
+        if not self.fix_base and base_pos[2] < FALL_HEIGHT_THRESHOLD:
             reward -= 100.0
             terminated = True
 
@@ -193,6 +195,27 @@ class G1PhysicsEnv(gym.Env):
     def close(self):
         if self.viewer is not None:
             self.viewer.close()
+
+
+def _projected_gravity(quat_wxyz: np.ndarray) -> np.ndarray:
+    """
+    Gravity direction expressed in the base frame.
+
+    Computed directly from the quaternion instead of importing scipy inside the
+    hot loop. Note mju_rotVecMat converts an axis-angle vector to a matrix - it
+    does NOT accept a quaternion, so using it here was meaningless (and the
+    result was discarded).
+    """
+    q = np.asarray(quat_wxyz, dtype=np.float64)
+    n = np.linalg.norm(q)
+    if n < 1e-9:
+        return np.array([0.0, 0.0, -1.0], dtype=np.float32)
+    w, x, y, z = q / n
+    g = np.array([0.0, 0.0, -1.0], dtype=np.float64)
+    # v' = v + 2*w*(qv x v) + 2*(qv x (qv x v))
+    t = 2.0 * np.cross(np.array([x, y, z]), g)
+    out = g + w * t + np.cross(np.array([x, y, z]), t)
+    return out.astype(np.float32)
 
 
 class G1LocomotionEnv(gym.Env):
@@ -264,13 +287,7 @@ class G1LocomotionEnv(gym.Env):
     def _get_obs(self) -> np.ndarray:
         base_linvel, base_angvel = self.robot.get_base_vel()
         base_quat = self.robot.get_base_pose()[1]
-
-
-        gravity_world = np.array([0, 0, -1.0], dtype=np.float32)
-        rot = mujoco.mju_rotVecMat(np.zeros(3), base_quat)
-
-        from scipy.spatial.transform import Rotation as R
-        gravity_body = R.from_quat([base_quat[1], base_quat[2], base_quat[3], base_quat[0]]).apply(gravity_world)
+        gravity_body = _projected_gravity(base_quat)
 
         q = self.robot.get_joint_positions()[LEG_JOINTS]
         dq = self.robot.get_joint_velocities()[LEG_JOINTS]
@@ -283,8 +300,16 @@ class G1LocomotionEnv(gym.Env):
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         self.step_count += 1
 
+        # Honour the declared action_space and the robot's mechanical limits.
+        # step() may be called directly (not only through a wrapped vector env),
+        # so the bounds cannot be assumed.
+        action = np.clip(np.asarray(action, dtype=np.float32).reshape(len(LEG_JOINTS)),
+                         self.action_space.low, self.action_space.high)
 
-        self.target_q[LEG_JOINTS] = NOMINAL_STAND_Q[LEG_JOINTS] + action
+        leg_target = NOMINAL_STAND_Q[LEG_JOINTS] + action
+        lo = JOINT_LIMITS_MIN[LEG_JOINTS] + 0.03
+        hi = JOINT_LIMITS_MAX[LEG_JOINTS] - 0.03
+        self.target_q[LEG_JOINTS] = np.clip(leg_target, np.minimum(lo, hi), np.maximum(lo, hi))
         self.last_action = action.copy()
 
         for _ in range(self.decimation):
@@ -293,20 +318,17 @@ class G1LocomotionEnv(gym.Env):
         base_linvel, base_angvel = self.robot.get_base_vel()
         base_pos, _ = self.robot.get_base_pose()
 
-
         vx_err = base_linvel[0] - self.command[0]
         vy_err = base_linvel[1] - self.command[1]
         vyaw_err = base_angvel[2] - self.command[2]
 
         reward = -1.0 * (vx_err**2 + vy_err**2 + 0.5 * vyaw_err**2)
-        reward -= 0.01 * np.sum(action**2)
-        reward -= 0.001 * np.sum((self.target_q[LEG_JOINTS] - NOMINAL_STAND_Q[LEG_JOINTS])**2)
-
-
+        reward -= 0.01 * float(np.sum(action**2))
+        reward -= 0.001 * float(np.sum((self.target_q[LEG_JOINTS] - NOMINAL_STAND_Q[LEG_JOINTS])**2))
         reward += 0.1
 
         terminated = False
-        if not self.fix_base and base_pos[2] < 0.45:
+        if not self.fix_base and base_pos[2] < FALL_HEIGHT_THRESHOLD:
             reward -= 10.0
             terminated = True
 

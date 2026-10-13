@@ -19,12 +19,18 @@ try:  # package and flat-script imports both work
     from .g1_constants import (    LEFT_ARM_JOINTS,
     RIGHT_ARM_JOINTS,
     NOMINAL_STAND_Q,
-    NUM_BODY_MOTORS)
+    NUM_BODY_MOTORS,
+    JOINT_LIMITS_MIN,
+    JOINT_LIMITS_MAX,
+    JOINT_LIMIT_MARGIN)
 except ImportError:  # pragma: no cover - flat script layout
     from g1_constants import (LEFT_ARM_JOINTS,
-RIGHT_ARM_JOINTS,
-NOMINAL_STAND_Q,
-NUM_BODY_MOTORS)
+    RIGHT_ARM_JOINTS,
+    NOMINAL_STAND_Q,
+    NUM_BODY_MOTORS,
+    JOINT_LIMITS_MIN,
+    JOINT_LIMITS_MAX,
+    JOINT_LIMIT_MARGIN)
 
 
 class SinusoidalPositionalEncoding(nn.Module):
@@ -129,7 +135,11 @@ class ParquetChunkDataset(Dataset):
 
 
 def collect_multi_robot_experience(num_robots: int = 4, steps_per_robot: int = 100) -> list[tuple[np.ndarray, np.ndarray]]:
-    from g1_env import G1PhysicsEnv
+    try:
+        from .g1_env import G1PhysicsEnv
+    except ImportError:  # pragma: no cover - flat script layout
+        from g1_env import G1PhysicsEnv
+
     envs = [G1PhysicsEnv(render_mode="none", fix_base=True) for _ in range(num_robots)]
     experiences: list[tuple[np.ndarray, np.ndarray]] = []
     chunk_len = 50
@@ -254,7 +264,9 @@ def train_act_model(
 class G1ACTAutonomousRunner:
     def __init__(self, weights_path: str, device: str = "cpu"):
         self.device = torch.device(device)
-        ckpt = torch.load(weights_path, map_location=self.device)
+        # weights_only=True refuses to execute arbitrary pickled code. A .pt from
+        # an untrusted source is remote code execution, not a model file.
+        ckpt = torch.load(weights_path, map_location=self.device, weights_only=True)
         self.chunk_size = ckpt.get("chunk_size", 50)
         self.state_dim = ckpt.get("state_dim", 17)
         self.model = G1ActionChunkingTransformer(
@@ -268,29 +280,48 @@ class G1ACTAutonomousRunner:
         self.buffer_idx = 0
 
     def query_action(self, full_robot_q: np.ndarray, task_id: float = 0.0) -> np.ndarray:
+        """
+        Returns absolute joint targets for all 29 body motors.
+
+        The network emits a 16-wide action chunk whose first 14 entries are the
+        same quantity that was recorded as "action" during training, i.e. the
+        7-DOF per-arm command. In training those were produced by
+        env.action_space.sample(), which is a *bounded delta* in roughly
+        [-0.05, 0.05] rad, NOT an absolute joint angle. Treating them as
+        absolute positions snapped both arms to ~0 rad. They are therefore
+        applied as a delta on top of the current posture and clipped to the
+        model's joint limits.
+        """
         left_arm = full_robot_q[LEFT_ARM_JOINTS]
         right_arm = full_robot_q[RIGHT_ARM_JOINTS]
-        left_gripper = 0.0
-        right_gripper = 0.0
         if self.state_dim == 17:
-            obs = np.concatenate([left_arm, right_arm, [left_gripper, right_gripper, task_id]]).astype(np.float32)
+            obs = np.concatenate([left_arm, right_arm, [0.0, 0.0, task_id]]).astype(np.float32)
         else:
-            obs = np.concatenate([left_arm, right_arm, [left_gripper, right_gripper]]).astype(np.float32)
+            obs = np.concatenate([left_arm, right_arm, [0.0, 0.0]]).astype(np.float32)
 
         if not self.action_buffer or self.buffer_idx >= len(self.action_buffer):
             with torch.no_grad():
                 st_t = torch.from_numpy(obs).unsqueeze(0).to(self.device)
                 pred_chunk = self.model(st_t).squeeze(0).cpu().numpy()
-            self.action_buffer = [pred_chunk[i] for i in range(len(pred_chunk))]
+            self.action_buffer = [pred_chunk[i] for i in range(pred_chunk.shape[0])]
             self.buffer_idx = 0
 
-        act_16 = self.action_buffer[self.buffer_idx]
+        act = self.action_buffer[self.buffer_idx]
         self.buffer_idx += 1
 
-        out_q29 = full_robot_q.copy()
-        out_q29[LEFT_ARM_JOINTS] = act_16[:7]
-        out_q29[RIGHT_ARM_JOINTS] = act_16[7:14]
-        return out_q29
+        n_arm = len(LEFT_ARM_JOINTS)
+        if act.shape[0] < 2 * n_arm:
+            raise ValueError(
+                f'policy emits {act.shape[0]} action dims, need at least {2 * n_arm} '
+                'for the two 7-DOF arms'
+            )
+
+        out_q29 = np.array(full_robot_q, dtype=np.float32).copy()
+        out_q29[LEFT_ARM_JOINTS] = left_arm + act[:n_arm]
+        out_q29[RIGHT_ARM_JOINTS] = right_arm + act[n_arm:2 * n_arm]
+        lo = JOINT_LIMITS_MIN + JOINT_LIMIT_MARGIN
+        hi = JOINT_LIMITS_MAX - JOINT_LIMIT_MARGIN
+        return np.clip(out_q29, lo, hi).astype(np.float32)
 
 
 if __name__ == "__main__":

@@ -127,17 +127,27 @@ try:  # package and flat-script imports both work
 except ImportError:  # pragma: no cover - flat script layout
     from g1_safety import (G1FullSafetyManager,
 SafetyState)
-from run_simulation import G1CartesianController
 try:  # package and flat-script imports both work
-    from .g1_state import (    G1State,
-    G1Action)
+    from .run_simulation import G1CartesianController
 except ImportError:  # pragma: no cover - flat script layout
-    from g1_state import (G1State,
-G1Action)
-try:
+    from run_simulation import G1CartesianController
+try:  # package and flat-script imports both work
     from .g1_locomotion import G1LocomotionEngine
-except ImportError:
+except ImportError:  # pragma: no cover - flat script layout
     from g1_locomotion import G1LocomotionEngine
+try:
+    from .g1_dashboard import start_dashboard_server, update_telemetry
+except ImportError:
+    from g1_dashboard import start_dashboard_server, update_telemetry
+
+
+try:  # package and flat-script imports both work
+    from .g1_lerobot_bridge import export_to_unitree_lerobot
+except ImportError:  # pragma: no cover - flat script layout
+    try:
+        from g1_lerobot_bridge import export_to_unitree_lerobot
+    except ImportError:
+        export_to_unitree_lerobot = None
 
 
 def create_punch_script(duration: float = 3.0, fps: int = 50) -> Dict[str, Any]:
@@ -300,18 +310,31 @@ def simulate_g1(
 
 
     safety_mgr = G1FullSafetyManager(controller.target_q)
-    safety_mgr.set_state(SafetyState.ACTIVE_TELEOP)
+    # Start disarmed. The operator must explicitly press R (or engage a policy)
+    # before anything drives the joints; previously this jumped straight to
+    # ACTIVE_TELEOP so the first frame of a session was already live.
+    safety_mgr.set_state(SafetyState.DISARMED)
     safety_mgr.feed_watchdog()
 
-
     if hardware and isinstance(bridge, G1RealHardwareBridge):
-        if bridge.wait_for_robot(timeout=4.0):
-            real_q, _ = bridge.get_joint_states()
-            controller.target_q[:] = real_q[:NUM_BODY_MOTORS]
-            robot.reset(real_q[:NUM_BODY_MOTORS])
-            print("[SYNC] Synchronized with physical G1 joint angles.")
-        else:
-            print("[WARN] Robot not responding on DDS. Running in safe standby mode.")
+        if not bridge.wait_for_robot(timeout=5.0):
+            print("[FATAL] No LowState on DDS. Check power, cable, NIC and subnet.")
+            return {"status": "no_dds", "steps": 0, "elapsed_time": 0.0,
+                    "final_q": [], "final_hand_pos": []}
+        problems = bridge.validate_state()
+        if problems:
+            print("[FATAL] Pre-flight failed; nothing will be published:")
+            for p in problems:
+                print(f"  - {p}")
+            return {"status": "preflight_failed", "steps": 0, "elapsed_time": 0.0,
+                    "final_q": [], "final_hand_pos": [], "problems": problems}
+        real_q, _ = bridge.get_joint_states()
+        controller.target_q[:] = real_q[:NUM_BODY_MOTORS]
+        robot.reset(real_q[:NUM_BODY_MOTORS])
+        print("[SYNC] Synchronized with physical G1 joint angles. "
+              "Press O to engage motors, R to re-arm.")
+        safety_mgr.reset(real_q[:NUM_BODY_MOTORS])
+        safety_mgr.set_state(SafetyState.ACTIVE_TELEOP)
 
 
     player: Optional[TrajectoryPlayer] = None
@@ -388,6 +411,7 @@ def simulate_g1(
 
 
     print_sandbox_help()
+    start_dashboard_server(8080)
 
 
     def process_key(k: str):
@@ -479,7 +503,10 @@ def simulate_g1(
             if not act_active:
                 if act_runner is None:
                     try:
-                        from g1_act_trainer import G1ACTAutonomousRunner
+                        try:
+                            from .g1_act_trainer import G1ACTAutonomousRunner
+                        except ImportError:  # pragma: no cover - flat script layout
+                            from g1_act_trainer import G1ACTAutonomousRunner
                         weights = base_dir / "models" / "g1_act" / "act_policy_weights.pt"
                         if weights.exists():
                             act_runner = G1ACTAutonomousRunner(str(weights))
@@ -501,6 +528,8 @@ def simulate_g1(
                 print(f'\n[WALK] Target velocity: vx={loco.lin_vel_x:.2f} m/s, vy={loco.lin_vel_y:.2f} m/s, yaw={loco.ang_vel_z:.2f} rad/s')
             elif active_mode == "ARM":
                 target_pos[2] += step_size
+                robot.set_target_marker(target_pos)
+                last_mocap_pos = target_pos.copy()
             elif active_mode == "WAIST":
                 controller.target_q[WAIST_PITCH] = np.clip(controller.target_q[WAIST_PITCH] + 0.05, -0.4, 0.6)
             elif active_mode == "SQUAT":
@@ -519,6 +548,8 @@ def simulate_g1(
                 print(f'\n[WALK] Target velocity: vx={loco.lin_vel_x:.2f} m/s, vy={loco.lin_vel_y:.2f} m/s, yaw={loco.ang_vel_z:.2f} rad/s')
             elif active_mode == "ARM":
                 target_pos[2] -= step_size
+                robot.set_target_marker(target_pos)
+                last_mocap_pos = target_pos.copy()
             elif active_mode == "WAIST":
                 controller.target_q[WAIST_PITCH] = np.clip(controller.target_q[WAIST_PITCH] - 0.05, -0.4, 0.6)
             elif active_mode == "SQUAT":
@@ -545,6 +576,8 @@ def simulate_g1(
                 print(f'\n[WALK] Target velocity: vx={loco.lin_vel_x:.2f} m/s, vy={loco.lin_vel_y:.2f} m/s, yaw={loco.ang_vel_z:.2f} rad/s')
             elif active_mode == "ARM":
                 target_pos[1] += step_size
+                robot.set_target_marker(target_pos)
+                last_mocap_pos = target_pos.copy()
             elif active_mode == "WAIST":
                 controller.target_q[WAIST_YAW] = np.clip(controller.target_q[WAIST_YAW] + 0.08, -1.2, 1.2)
             elif active_mode == "LEFT_LEG":
@@ -560,6 +593,8 @@ def simulate_g1(
                 print(f'\n[WALK] Target velocity: vx={loco.lin_vel_x:.2f} m/s, vy={loco.lin_vel_y:.2f} m/s, yaw={loco.ang_vel_z:.2f} rad/s')
             elif active_mode == "ARM":
                 target_pos[1] -= step_size
+                robot.set_target_marker(target_pos)
+                last_mocap_pos = target_pos.copy()
             elif active_mode == "WAIST":
                 controller.target_q[WAIST_YAW] = np.clip(controller.target_q[WAIST_YAW] - 0.08, -1.2, 1.2)
             elif active_mode == "LEFT_LEG":
@@ -575,6 +610,8 @@ def simulate_g1(
                 print(f'\n[WALK] Target velocity: vx={loco.lin_vel_x:.2f} m/s, vy={loco.lin_vel_y:.2f} m/s, yaw={loco.ang_vel_z:.2f} rad/s')
             elif active_mode == "ARM":
                 target_pos[0] += step_size
+                robot.set_target_marker(target_pos)
+                last_mocap_pos = target_pos.copy()
             elif active_mode == "WAIST":
                 controller.target_q[WAIST_ROLL] = np.clip(controller.target_q[WAIST_ROLL] + 0.05, -0.4, 0.4)
             elif active_mode == "LEFT_LEG":
@@ -592,6 +629,8 @@ def simulate_g1(
                 print(f'\n[WALK] Target velocity: vx={loco.lin_vel_x:.2f} m/s, vy={loco.lin_vel_y:.2f} m/s, yaw={loco.ang_vel_z:.2f} rad/s')
             elif active_mode == "ARM":
                 target_pos[0] -= step_size
+                robot.set_target_marker(target_pos)
+                last_mocap_pos = target_pos.copy()
             elif active_mode == "WAIST":
                 controller.target_q[WAIST_ROLL] = np.clip(controller.target_q[WAIST_ROLL] - 0.05, -0.4, 0.4)
             elif active_mode == "LEFT_LEG":
@@ -662,6 +701,8 @@ def simulate_g1(
                     print(f'\n[RECORDER] Saved: {saved.name}')
 
                     try:
+                        if export_to_unitree_lerobot is None:
+                            raise RuntimeError('g1_lerobot_bridge unavailable')
                         lerobot_out = base_dir / "datasets" / f"lerobot_{saved.stem}"
                         export_to_unitree_lerobot(str(saved), str(lerobot_out))
                     except Exception as ex:
@@ -695,11 +736,11 @@ def simulate_g1(
         elif k == ' ':
             safety_mgr.emergency_stop("Spacebar Emergency Stop")
             if hardware and isinstance(bridge, G1RealHardwareBridge):
-                bridge.stop_streaming()
+                bridge.emergency_stop()
             if player:
                 player.stop()
             active_script_pts = None
-            print('\n[SAFETY] >>> EMERGENCY STOP! All joints locked. <<<')
+            print('\n[SAFETY] >>> EMERGENCY STOP! Torque disabled. Press R to re-arm. <<<')
 
 
         elif k == 'r':
@@ -838,52 +879,75 @@ def simulate_g1(
             pelvis_p=robot.get_base_pose()[0],
             base_height=float(robot.get_base_pose()[0][2]),
         )
-        controller.target_q[:] = action_out.q_des[:]
-
+        controller.target_q[:] = action_out.q_des[:NUM_BODY_MOTORS]
+        robot.kp[:] = action_out.kp[:NUM_BODY_MOTORS]
+        robot.kd[:] = action_out.kd[:NUM_BODY_MOTORS]
 
         if active_mode == "WALK" and loco.is_active:
-            for _ in range(4):
-                loco.step()
-                mujoco.mj_step(robot.model, robot.data)
-            controller.target_q[:] = loco.target_joint_pos[:NUM_BODY_MOTORS]
+            loco.step()
+            for _ in range(10):
+                robot.step_physics(loco.target_joint_pos, write_ctrl=False)
         else:
             for _ in range(10):
                 robot.step_physics(controller.target_q)
 
         robot.data.xfrc_applied[robot.pelvis_bid, :] = 0.0
 
-
         if hardware and (time.time() - last_hw_time) >= 0.02:
-            bridge.send_joint_targets(controller.target_q)
+            bridge.send_joint_targets(
+                q_des=action_out.q_des[:NUM_BODY_MOTORS],
+                kp=action_out.kp[:NUM_BODY_MOTORS],
+                kd=action_out.kd[:NUM_BODY_MOTORS],
+                tau_ff=action_out.tau_ff[:NUM_BODY_MOTORS],
+            )
             last_hw_time = time.time()
 
 
         if time.time() - last_print_time >= 0.35:
             hand_p = robot.get_hand_pos(controller.right_arm)
             arm_str = "R_ARM" if controller.right_arm else "L_ARM"
-            mode_str = f"[{active_mode}:{arm_str}]"
-            hw_str = "[HW: STREAMING]" if bridge.is_hardware_active() else "[SIMULATION]"
-            safe_str = f"[{safety_status.state.value}]"
-            rec_str = " [REC: ON]" if recorder.is_recording else ""
-            play_str = " [PLAY]" if player and player.is_playing else ""
+            hq = robot.get_hand_quat(controller.right_arm)
+            w, x, y, z = float(hq[0]), float(hq[1]), float(hq[2]), float(hq[3])
+            sinr_cosp = 2.0 * (w * x + y * z)
+            cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+            roll = math.degrees(math.atan2(sinr_cosp, cosr_cosp))
+            sinp = 2.0 * (w * y - z * x)
+            pitch = math.degrees(math.copysign(math.pi / 2.0, sinp) if abs(sinp) >= 1.0 else math.asin(sinp))
+            siny_cosp = 2.0 * (w * z + x * y)
+            cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+            yaw = math.degrees(math.atan2(siny_cosp, cosy_cosp))
+
+            err_mm = float(np.linalg.norm(safe_target - hand_p)) * 1000.0
 
             if active_mode == "WALK":
                 pos_xy = robot.data.qpos[0:2]
                 sys.stdout.write(
-                    f"\r{mode_str}{safe_str}{hw_str}{rec_str} "
-                    f"Cmd:[vx={loco.lin_vel_x:.2f}, vy={loco.lin_vel_y:.2f}, yaw={loco.ang_vel_z:.2f}] | "
-                    f"Pos:[x={pos_xy[0]:.2f}, y={pos_xy[1]:.2f}, z={robot.data.qpos[2]:.2f}]m | "
-                    f"Elevation:{robot.data.qpos[2]:.3f}m"
+                    f"\rMotors: Yaw={yaw:5.1f}° Pitch={pitch:5.1f}° Roll={roll:5.1f}° | "
+                    f"Cmd: vx={loco.lin_vel_x:.2f} vy={loco.lin_vel_y:.2f} yaw={loco.ang_vel_z:.2f} | "
+                    f"Pos: [{pos_xy[0]:.2f}, {pos_xy[1]:.2f}, {robot.data.qpos[2]:.2f}]m | "
+                    f"Err: {err_mm:4.1f}mm"
                 )
             else:
-                err_mm = float(np.linalg.norm(safe_target - hand_p)) * 1000.0
                 sys.stdout.write(
-                    f"\r{mode_str}{safe_str}{hw_str}{rec_str}{play_str} "
-                    f"Target:[{safe_target[0]:.2f}, {safe_target[1]:.2f}, {safe_target[2]:.2f}]m | "
-                    f"Hand:[{hand_p[0]:.2f}, {hand_p[1]:.2f}, {hand_p[2]:.2f}]m | "
-                    f"IK Err:{err_mm:4.1f}mm"
+                    f"\rMotors: Yaw={yaw:5.1f}° Pitch={pitch:5.1f}° Roll={roll:5.1f}° | "
+                    f"Target: [{safe_target[0]:.2f}, {safe_target[1]:.2f}, {safe_target[2]:.2f}]m | "
+                    f"Hand: [{hand_p[0]:.2f}, {hand_p[1]:.2f}, {hand_p[2]:.2f}]m | "
+                    f"Err: {err_mm:4.1f}mm"
                 )
             sys.stdout.flush()
+            update_telemetry(
+                active_mode=active_mode,
+                arm=arm_str,
+                target=safe_target,
+                hand=hand_p,
+                err_mm=err_mm,
+                euler={"yaw": yaw, "pitch": pitch, "roll": roll},
+                q=robot.get_joint_positions(),
+                tau=robot.get_joint_torques(),
+                q_des=controller.target_q,
+                base_pos=robot.get_base_pose()[0],
+                walk_cmd=[loco.lin_vel_x, loco.lin_vel_y, loco.ang_vel_z] if active_mode == "WALK" else [0.0, 0.0, 0.0]
+            )
             last_print_time = time.time()
 
 

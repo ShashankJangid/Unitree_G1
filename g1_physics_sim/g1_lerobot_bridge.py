@@ -30,13 +30,15 @@ try:  # package and flat-script imports both work
     RIGHT_ARM_JOINTS,
     WAIST_JOINTS,
     NUM_BODY_MOTORS,
-    NOMINAL_STAND_Q)
+    NOMINAL_STAND_Q,
+    JOINT_NAMES_29DOF)
 except ImportError:  # pragma: no cover - flat script layout
     from g1_constants import (LEFT_ARM_JOINTS,
-RIGHT_ARM_JOINTS,
-WAIST_JOINTS,
-NUM_BODY_MOTORS,
-NOMINAL_STAND_Q)
+    RIGHT_ARM_JOINTS,
+    WAIST_JOINTS,
+    NUM_BODY_MOTORS,
+    NOMINAL_STAND_Q,
+    JOINT_NAMES_29DOF)
 
 
 def export_to_unitree_lerobot(json_file_path: str, output_dir: str) -> str:
@@ -53,10 +55,17 @@ def export_to_unitree_lerobot(json_file_path: str, output_dir: str) -> str:
     target_json = out_path / "data.json"
 
     frames = data.get("frames", [])
-    lerobot_frames = []
+    if not frames:
+        raise ValueError(f"No frames found in {src}")
 
-    for frame in frames:
-        q = np.array(frame["joint_q"], dtype=np.float32)
+    lerobot_frames = []
+    for n, frame in enumerate(frames):
+        q = np.asarray(frame["joint_q"], dtype=np.float32)
+        if q.shape[0] != NUM_BODY_MOTORS:
+            raise ValueError(
+                f"frame {n} has {q.shape[0]} joints, expected {NUM_BODY_MOTORS}. "
+                "Hands are a separate subsystem and are not part of the body vector."
+            )
         left_arm_q = q[LEFT_ARM_JOINTS].tolist()
         right_arm_q = q[RIGHT_ARM_JOINTS].tolist()
         waist_q = q[WAIST_JOINTS].tolist()
@@ -66,7 +75,9 @@ def export_to_unitree_lerobot(json_file_path: str, output_dir: str) -> str:
             "left_arm.qpos": left_arm_q,
             "right_arm.qpos": right_arm_q,
             "waist.qpos": waist_q,
-            "action": left_arm_q + right_arm_q,
+            # Action must mirror the exported qpos groups exactly, otherwise a
+            # round-trip silently drops waist motion.
+            "action": left_arm_q + waist_q + right_arm_q,
             "target_pos": frame.get("target_pos", [0.0, 0.0, 0.0]),
         })
 
@@ -109,8 +120,8 @@ def import_from_unitree_lerobot(lerobot_json_path: str, output_traj_path: str = 
             "joint_q": full_q.tolist(),
             "joint_dq": [0.0] * NUM_BODY_MOTORS,
             "target_pos": item.get("target_pos", [0.20, 0.18, 0.85]),
-            "hand_pos_l": [0.20, 0.18, 0.85],
-            "hand_pos_r": [0.20, -0.18, 0.85],
+            "left_wrist_pos": item.get("target_pos", [0.20, 0.18, 0.85]),
+            "right_wrist_pos": item.get("target_pos", [0.20, -0.18, 0.85]),
         })
 
     if output_traj_path is None:
@@ -120,10 +131,14 @@ def import_from_unitree_lerobot(lerobot_json_path: str, output_traj_path: str = 
     out_p.parent.mkdir(parents=True, exist_ok=True)
     with open(out_p, "w", encoding="utf-8") as f:
         json.dump({
-            "version": "1.0",
+            # Field names must match TrajectoryRecorder / TrajectoryPlayer,
+            # which validates num_motors and requires duration_sec.
+            "name": out_p.stem,
+            "num_motors": NUM_BODY_MOTORS,
+            "joint_names": list(JOINT_NAMES_29DOF),
+            "num_frames": len(sim_frames),
+            "duration_sec": len(sim_frames) / max(1, fps),
             "fps": fps,
-            "total_frames": len(sim_frames),
-            "duration": len(sim_frames) / max(1, fps),
             "frames": sim_frames,
         }, f, indent=2)
 

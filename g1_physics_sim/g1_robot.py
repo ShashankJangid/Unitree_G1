@@ -286,8 +286,17 @@ class G1Robot:
         self,
         q_des: np.ndarray,
         dq_des: Optional[np.ndarray] = None,
-        tau_ff: Optional[np.ndarray] = None
+        tau_ff: Optional[np.ndarray] = None,
+        write_ctrl: bool = True
     ) -> np.ndarray:
+        """
+        Advance physics one 500 Hz tick.
+
+        write_ctrl=False leaves data.ctrl alone so an external controller
+        (e.g. G1LocomotionEngine, which computes its own high-fidelity actuator
+        torques) can own it. Otherwise this PD overwrites the external torque
+        every step and the external policy becomes a silent no-op.
+        """
         cmd = np.array(q_des, dtype=np.float32)[:self.num_motors].copy()
         if not self.fix_base and self.pelvis_bid != -1:
             com = self.data.subtree_com[self.pelvis_bid]
@@ -307,10 +316,11 @@ class G1Robot:
 
         torques = self.compute_pd_torques(cmd, dq_des, tau_ff)
 
-        for i in range(self.num_motors):
-            aid = self._actuator_id[i]
-            if aid != -1:
-                self.data.ctrl[aid] = torques[i]
+        if write_ctrl:
+            for i in range(self.num_motors):
+                aid = self._actuator_id[i]
+                if aid != -1:
+                    self.data.ctrl[aid] = torques[i]
 
         if self.fix_base:
             self.data.qpos[0:2] = 0.0
