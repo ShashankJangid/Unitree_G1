@@ -134,10 +134,10 @@ try:  # package and flat-script imports both work
 except ImportError:  # pragma: no cover - flat script layout
     from g1_state import (G1State,
 G1Action)
-try:  # package and flat-script imports both work
-    from .g1_lerobot_bridge import (    export_to_unitree_lerobot)
-except ImportError:  # pragma: no cover - flat script layout
-    from g1_lerobot_bridge import (export_to_unitree_lerobot)
+try:
+    from .g1_locomotion import G1LocomotionEngine
+except ImportError:
+    from g1_locomotion import G1LocomotionEngine
 
 
 def create_punch_script(duration: float = 3.0, fps: int = 50) -> Dict[str, Any]:
@@ -219,6 +219,7 @@ def print_sandbox_help():
 |                     UNITREE G1 EDU - INTERACTIVE SANDBOX COMMANDS                    |
 +--------------------------------------------------------------------------------------+
 |  [MODES & HUMANOID CONTROL]                                                          |
+|    '0' or 'V'    : Toggle DYNAMIC WALKING MODE (Full Biped Ground Locomotion)         |
 |    '1'           : Select LEFT Arm for Cartesian Reaching (W/S/A/D/Q/E)               |
 |    '2'           : Select RIGHT Arm for Cartesian Reaching (W/S/A/D/Q/E)              |
 |    '3'           : Toggle WAIST Articulation (W/S Pitch, A/D Yaw, Q/E Roll)           |
@@ -231,7 +232,15 @@ def print_sandbox_help():
 |    'J'           : Trigger Official G1 Arm Actions (Salute, Hug, Kiss, Clap, Wave)    |
 |    'K'           : Toggle Official Hand Grip (G1 Hand SDK Torque Close / Open)        |
 |                                                                                      |
-|  [3D CARTESIAN & KEYBOARD NUDGING]                                                   |
+|  [DYNAMIC WALKING CONTROLS - WHEN MODE 0 / V ACTIVE]                                |
+|    'W' / Up      : Walk Forward (+0.1 m/s)                                            |
+|    'S' / Down    : Stop / Slow Down (0.0 m/s)                                         |
+|    'A' / Left    : Turn Left / Rotate Counter-Clockwise (+0.2 rad/s)                  |
+|    'D' / Right   : Turn Right / Rotate Clockwise (-0.2 rad/s)                         |
+|    'Q' / 'E'     : Strafe Left / Strafe Right                                         |
+|    'X'           : Immediate Full Stop (Zero All Walking Velocities)                  |
+|                                                                                      |
+|  [3D CARTESIAN & KEYBOARD NUDGING - WHEN ARM/TELEOP ACTIVE]                          |
 |    Ctrl + RClick : Mouse 3D Drag & Drop Target Sphere anywhere in space              |
 |    'W' / 'S'     : Nudge Z-Axis (Up / Down)                                          |
 |    'A' / 'D'     : Nudge Y-Axis (Left / Right)                                       |
@@ -362,11 +371,16 @@ def simulate_g1(
         recorder.start()
 
 
+    loco = G1LocomotionEngine(robot.model, robot.data)
+    loco.is_active = False
+
     target_pos = robot.get_hand_pos(controller.right_arm).copy()
     last_mocap_pos = target_pos.copy()
     robot.set_target_marker(target_pos)
     step_size = 0.015
-    active_mode = "ARM"
+    active_mode = "WALK" if free_standing else "ARM"
+    if active_mode == "WALK":
+        loco.is_active = True
     squat_elevation = 0.793
     last_saved_traj: Optional[pathlib.Path] = None
     act_runner = None
@@ -377,13 +391,27 @@ def simulate_g1(
 
 
     def process_key(k: str):
-        nonlocal target_pos, step_size, active_mode, squat_elevation, player, active_script_pts, script_pt_idx, last_saved_traj, act_runner, act_active
+        nonlocal target_pos, step_size, active_mode, squat_elevation, player, active_script_pts, script_pt_idx, last_saved_traj, act_runner, act_active, loco
         k = k.lower()
 
         if k == 'h':
             print_sandbox_help()
 
+        elif k in ('0', 'v'):
+            if active_mode != "WALK":
+                active_mode = "WALK"
+                robot.fix_base = False
+                robot.data.qpos[2] = 0.77417
+                loco.is_active = True
+                print('\n[MODE] >>> DYNAMIC GROUND WALKING MODE ENGAGED! Use W/S/A/D/Q/E or Arrows to Walk. <<<')
+            else:
+                active_mode = "ARM"
+                loco.is_active = False
+                loco.set_velocity_command(0.0, 0.0, 0.0)
+                print('\n[MODE] Reverted to ARM 3D Cartesian Reaching.')
+
         elif k == '1':
+            loco.is_active = False
             controller.set_arm(False)
             target_pos = robot.get_hand_pos(False).copy()
             active_mode = "ARM"
@@ -468,7 +496,10 @@ def simulate_g1(
                 print('\n[ACT POLICY] >>> Autonomous policy disengaged. Reverted to teleop. <<<')
 
         elif k in ('w', 'up'):
-            if active_mode == "ARM":
+            if active_mode == "WALK":
+                loco.lin_vel_x = float(np.clip(loco.lin_vel_x + 0.1, -0.6, 1.2))
+                print(f'\n[WALK] Target velocity: vx={loco.lin_vel_x:.2f} m/s, vy={loco.lin_vel_y:.2f} m/s, yaw={loco.ang_vel_z:.2f} rad/s')
+            elif active_mode == "ARM":
                 target_pos[2] += step_size
             elif active_mode == "WAIST":
                 controller.target_q[WAIST_PITCH] = np.clip(controller.target_q[WAIST_PITCH] + 0.05, -0.4, 0.6)
@@ -483,7 +514,10 @@ def simulate_g1(
                 controller.target_q[WAIST_PITCH] = np.clip(controller.target_q[WAIST_PITCH] + 0.05, -0.4, 0.6)
 
         elif k in ('s', 'down'):
-            if active_mode == "ARM":
+            if active_mode == "WALK":
+                loco.lin_vel_x = float(np.clip(loco.lin_vel_x - 0.1, 0.0, 1.2))
+                print(f'\n[WALK] Target velocity: vx={loco.lin_vel_x:.2f} m/s, vy={loco.lin_vel_y:.2f} m/s, yaw={loco.ang_vel_z:.2f} rad/s')
+            elif active_mode == "ARM":
                 target_pos[2] -= step_size
             elif active_mode == "WAIST":
                 controller.target_q[WAIST_PITCH] = np.clip(controller.target_q[WAIST_PITCH] - 0.05, -0.4, 0.6)
@@ -506,7 +540,10 @@ def simulate_g1(
                 controller.target_q[WAIST_PITCH] = np.clip(controller.target_q[WAIST_PITCH] - 0.05, -0.4, 0.6)
 
         elif k in ('a', 'left'):
-            if active_mode == "ARM":
+            if active_mode == "WALK":
+                loco.ang_vel_z = float(np.clip(loco.ang_vel_z + 0.2, -1.0, 1.0))
+                print(f'\n[WALK] Target velocity: vx={loco.lin_vel_x:.2f} m/s, vy={loco.lin_vel_y:.2f} m/s, yaw={loco.ang_vel_z:.2f} rad/s')
+            elif active_mode == "ARM":
                 target_pos[1] += step_size
             elif active_mode == "WAIST":
                 controller.target_q[WAIST_YAW] = np.clip(controller.target_q[WAIST_YAW] + 0.08, -1.2, 1.2)
@@ -518,7 +555,10 @@ def simulate_g1(
                 controller.target_q[WAIST_YAW] = np.clip(controller.target_q[WAIST_YAW] + 0.08, -1.2, 1.2)
 
         elif k in ('d', 'right'):
-            if active_mode == "ARM":
+            if active_mode == "WALK":
+                loco.ang_vel_z = float(np.clip(loco.ang_vel_z - 0.2, -1.0, 1.0))
+                print(f'\n[WALK] Target velocity: vx={loco.lin_vel_x:.2f} m/s, vy={loco.lin_vel_y:.2f} m/s, yaw={loco.ang_vel_z:.2f} rad/s')
+            elif active_mode == "ARM":
                 target_pos[1] -= step_size
             elif active_mode == "WAIST":
                 controller.target_q[WAIST_YAW] = np.clip(controller.target_q[WAIST_YAW] - 0.08, -1.2, 1.2)
@@ -530,7 +570,10 @@ def simulate_g1(
                 controller.target_q[WAIST_YAW] = np.clip(controller.target_q[WAIST_YAW] - 0.08, -1.2, 1.2)
 
         elif k == 'q':
-            if active_mode == "ARM":
+            if active_mode == "WALK":
+                loco.lin_vel_y = float(np.clip(loco.lin_vel_y + 0.1, -0.5, 0.5))
+                print(f'\n[WALK] Target velocity: vx={loco.lin_vel_x:.2f} m/s, vy={loco.lin_vel_y:.2f} m/s, yaw={loco.ang_vel_z:.2f} rad/s')
+            elif active_mode == "ARM":
                 target_pos[0] += step_size
             elif active_mode == "WAIST":
                 controller.target_q[WAIST_ROLL] = np.clip(controller.target_q[WAIST_ROLL] + 0.05, -0.4, 0.4)
@@ -544,7 +587,10 @@ def simulate_g1(
                 controller.target_q[WAIST_ROLL] = np.clip(controller.target_q[WAIST_ROLL] + 0.05, -0.4, 0.4)
 
         elif k == 'e':
-            if active_mode == "ARM":
+            if active_mode == "WALK":
+                loco.lin_vel_y = float(np.clip(loco.lin_vel_y - 0.1, -0.5, 0.5))
+                print(f'\n[WALK] Target velocity: vx={loco.lin_vel_x:.2f} m/s, vy={loco.lin_vel_y:.2f} m/s, yaw={loco.ang_vel_z:.2f} rad/s')
+            elif active_mode == "ARM":
                 target_pos[0] -= step_size
             elif active_mode == "WAIST":
                 controller.target_q[WAIST_ROLL] = np.clip(controller.target_q[WAIST_ROLL] - 0.05, -0.4, 0.4)
@@ -556,6 +602,11 @@ def simulate_g1(
                 controller.target_q[R_ANKLE_PITCH] = -0.5 * controller.target_q[R_KNEE]
             elif active_mode == "TORSO_TWIST":
                 controller.target_q[WAIST_ROLL] = np.clip(controller.target_q[WAIST_ROLL] - 0.05, -0.4, 0.4)
+
+        elif k == 'x':
+            if active_mode == "WALK":
+                loco.set_velocity_command(0.0, 0.0, 0.0)
+                print('\n[WALK] STOPPED: Velocity set to zero.')
 
 
         elif k == 'b':
@@ -790,9 +841,14 @@ def simulate_g1(
         controller.target_q[:] = action_out.q_des[:]
 
 
-        for _ in range(10):
-            robot.step_physics(controller.target_q)
-
+        if active_mode == "WALK" and loco.is_active:
+            for _ in range(4):
+                loco.step()
+                mujoco.mj_step(robot.model, robot.data)
+            controller.target_q[:] = loco.target_joint_pos[:NUM_BODY_MOTORS]
+        else:
+            for _ in range(10):
+                robot.step_physics(controller.target_q)
 
         robot.data.xfrc_applied[robot.pelvis_bid, :] = 0.0
 
@@ -804,7 +860,6 @@ def simulate_g1(
 
         if time.time() - last_print_time >= 0.35:
             hand_p = robot.get_hand_pos(controller.right_arm)
-            err_mm = float(np.linalg.norm(safe_target - hand_p)) * 1000.0
             arm_str = "R_ARM" if controller.right_arm else "L_ARM"
             mode_str = f"[{active_mode}:{arm_str}]"
             hw_str = "[HW: STREAMING]" if bridge.is_hardware_active() else "[SIMULATION]"
@@ -812,12 +867,22 @@ def simulate_g1(
             rec_str = " [REC: ON]" if recorder.is_recording else ""
             play_str = " [PLAY]" if player and player.is_playing else ""
 
-            sys.stdout.write(
-                f"\r{mode_str}{safe_str}{hw_str}{rec_str}{play_str} "
-                f"Target:[{safe_target[0]:.2f}, {safe_target[1]:.2f}, {safe_target[2]:.2f}]m | "
-                f"Hand:[{hand_p[0]:.2f}, {hand_p[1]:.2f}, {hand_p[2]:.2f}]m | "
-                f"IK Err:{err_mm:4.1f}mm"
-            )
+            if active_mode == "WALK":
+                pos_xy = robot.data.qpos[0:2]
+                sys.stdout.write(
+                    f"\r{mode_str}{safe_str}{hw_str}{rec_str} "
+                    f"Cmd:[vx={loco.lin_vel_x:.2f}, vy={loco.lin_vel_y:.2f}, yaw={loco.ang_vel_z:.2f}] | "
+                    f"Pos:[x={pos_xy[0]:.2f}, y={pos_xy[1]:.2f}, z={robot.data.qpos[2]:.2f}]m | "
+                    f"Elevation:{robot.data.qpos[2]:.3f}m"
+                )
+            else:
+                err_mm = float(np.linalg.norm(safe_target - hand_p)) * 1000.0
+                sys.stdout.write(
+                    f"\r{mode_str}{safe_str}{hw_str}{rec_str}{play_str} "
+                    f"Target:[{safe_target[0]:.2f}, {safe_target[1]:.2f}, {safe_target[2]:.2f}]m | "
+                    f"Hand:[{hand_p[0]:.2f}, {hand_p[1]:.2f}, {hand_p[2]:.2f}]m | "
+                    f"IK Err:{err_mm:4.1f}mm"
+                )
             sys.stdout.flush()
             last_print_time = time.time()
 
