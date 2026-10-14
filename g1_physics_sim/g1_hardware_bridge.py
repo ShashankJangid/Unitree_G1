@@ -31,6 +31,11 @@ ARM_SDK_WEIGHT_RATE, ARM_SDK_CONTROL_DT, LOWCMD_CONTROL_DT,
 TORQUE_LIMITS, JOINT_LIMITS_MIN, JOINT_LIMITS_MAX, JOINT_LIMIT_MARGIN)
 
 try:
+    import sys
+    import pathlib
+    base_repo_dir = pathlib.Path(__file__).resolve().parent.parent / 'official_unitree_repos' / 'unitree_sdk2_python'
+    if base_repo_dir.exists() and str(base_repo_dir) not in sys.path:
+        sys.path.insert(0, str(base_repo_dir))
     from unitree_sdk2py.core.channel import (
         ChannelFactoryInitialize, ChannelPublisher, ChannelSubscriber
     )
@@ -39,18 +44,18 @@ try:
     from unitree_sdk2py.utils.crc import CRC
     from unitree_sdk2py.utils.thread import RecurrentThread
     from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import MotionSwitcherClient
+    from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
     SDK_AVAILABLE = True
     SDK_IMPORT_ERROR = None
-except Exception as _e:  # pragma: no cover
+except Exception as _e:
     SDK_AVAILABLE = False
     SDK_IMPORT_ERROR = _e
     LowCmd_ = LowState_ = IMUState_ = unitree_hg_msg_dds__LowCmd_ = None
-    CRC = RecurrentThread = MotionSwitcherClient = None
+    CRC = RecurrentThread = MotionSwitcherClient = LocoClient = None
     ChannelFactoryInitialize = ChannelPublisher = ChannelSubscriber = None
 
 
 class G1Bridge(abc.ABC):
-    """Abstract sim/real bridge."""
 
     @abc.abstractmethod
     def send_joint_targets(self, q_des, kp=None, kd=None, dq_des=None, tau_ff=None) -> None: ...
@@ -66,11 +71,20 @@ class G1Bridge(abc.ABC):
     def emergency_stop(self) -> None: ...
     @abc.abstractmethod
     def tick(self) -> None: ...
-    # ABC helper kept for backwards compatibility with older callers
     def enable_arm_sdk(self, enable: bool = True) -> bool:
         return False
     def release_motion_mode(self) -> bool:
         return False
+    def move(self, vx: float, vy: float, vyaw: float) -> None:
+        pass
+    def damp(self) -> None:
+        pass
+    def squat2stand(self) -> None:
+        pass
+    def stand2squat(self) -> None:
+        pass
+    def zero_torque(self) -> None:
+        pass
 
 
 class G1SimBridge(G1Bridge):
@@ -115,6 +129,24 @@ class G1SimBridge(G1Bridge):
         self._target_q[:] = self.robot.get_joint_positions()
         self._target_dq[:] = 0.0
         self._target_tau_ff[:] = 0.0
+
+    def move(self, vx: float, vy: float, vyaw: float) -> None:
+        if hasattr(self.robot, 'walk_vx'):
+            self.robot.walk_vx = float(vx)
+            self.robot.walk_vy = float(vy)
+            self.robot.walk_wz = float(vyaw)
+
+    def damp(self) -> None:
+        self.emergency_stop()
+
+    def squat2stand(self) -> None:
+        pass
+
+    def stand2squat(self) -> None:
+        pass
+
+    def zero_torque(self) -> None:
+        pass
 
 
 class G1RealHardwareBridge(G1Bridge):
@@ -219,6 +251,7 @@ class G1RealHardwareBridge(G1Bridge):
         self._remote_sub = None
         self._motion_switcher = None
         self._motion_released = False
+        self._loco_client = None
 
         self._state_age_at_start = 0.0
         self._publish_errors = 0
@@ -261,6 +294,14 @@ class G1RealHardwareBridge(G1Bridge):
                     self._motion_switcher.Init()
                 except Exception as e:
                     print(f"[G1Hardware] MotionSwitcherClient unavailable: {e}")
+
+            if SDK_AVAILABLE and LocoClient is not None:
+                try:
+                    self._loco_client = LocoClient()
+                    self._loco_client.SetTimeout(5.0)
+                    self._loco_client.Init()
+                except Exception:
+                    self._loco_client = None
 
             self.is_connected = True
             print('[G1Hardware] DDS ready.')
@@ -613,7 +654,47 @@ class G1RealHardwareBridge(G1Bridge):
         with self._estop_lock:
             return self._estop_pressed
 
+    def move(self, vx: float, vy: float, vyaw: float) -> None:
+        if self._loco_client is not None:
+            try:
+                self._loco_client.Move(float(vx), float(vy), float(vyaw))
+            except Exception:
+                pass
+
+    def damp(self) -> None:
+        if self._loco_client is not None:
+            try:
+                self._loco_client.Damp()
+            except Exception:
+                pass
+
+    def squat2stand(self) -> None:
+        if self._loco_client is not None:
+            try:
+                self._loco_client.Squat2StandUp()
+            except Exception:
+                pass
+
+    def stand2squat(self) -> None:
+        if self._loco_client is not None:
+            try:
+                self._loco_client.StandUp2Squat()
+            except Exception:
+                pass
+
+    def zero_torque(self) -> None:
+        if self._loco_client is not None:
+            try:
+                self._loco_client.ZeroTorque()
+            except Exception:
+                pass
+
     def close(self) -> None:
+        if self._loco_client is not None:
+            try:
+                self._loco_client.Move(0.0, 0.0, 0.0)
+            except Exception:
+                pass
         self.stop_streaming()
         self.is_connected = False
 

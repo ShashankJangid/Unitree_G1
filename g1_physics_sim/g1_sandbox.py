@@ -422,12 +422,16 @@ def simulate_g1(
                 active_mode = "WALK"
                 robot.fix_base = False
                 robot.data.qpos[2] = 0.77417
+                w, x, y, z = float(robot.data.qpos[3]), float(robot.data.qpos[4]), float(robot.data.qpos[5]), float(robot.data.qpos[6])
+                robot.target_yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+                loco.reset()
                 loco.is_active = True
                 print('\n[MODE] >>> DYNAMIC GROUND WALKING MODE ENGAGED! Use W/S/A/D/Q/E or Arrows to Walk. <<<')
             else:
                 active_mode = "ARM"
                 loco.is_active = False
                 loco.set_velocity_command(0.0, 0.0, 0.0)
+                robot.is_walking = False
                 print('\n[MODE] Reverted to ARM 3D Cartesian Reaching.')
 
         elif k == '1':
@@ -638,7 +642,7 @@ def simulate_g1(
             elif active_mode == "TORSO_TWIST":
                 controller.target_q[WAIST_ROLL] = np.clip(controller.target_q[WAIST_ROLL] - 0.05, -0.4, 0.4)
 
-        elif k == 'x':
+        elif k in ('x', ' '):
             if active_mode == "WALK":
                 loco.set_velocity_command(0.0, 0.0, 0.0)
                 print('\n[WALK] STOPPED: Velocity set to zero.')
@@ -908,12 +912,15 @@ def simulate_g1(
         robot.data.xfrc_applied[robot.pelvis_bid, :] = 0.0
 
         if hardware and (time.time() - last_hw_time) >= 0.02:
-            bridge.send_joint_targets(
-                q_des=action_out.q_des[:NUM_BODY_MOTORS],
-                kp=action_out.kp[:NUM_BODY_MOTORS],
-                kd=action_out.kd[:NUM_BODY_MOTORS],
-                tau_ff=action_out.tau_ff[:NUM_BODY_MOTORS],
-            )
+            if active_mode == "WALK":
+                bridge.move(loco.lin_vel_x, loco.lin_vel_y, loco.ang_vel_z)
+            else:
+                bridge.send_joint_targets(
+                    q_des=action_out.q_des[:NUM_BODY_MOTORS],
+                    kp=action_out.kp[:NUM_BODY_MOTORS],
+                    kd=action_out.kd[:NUM_BODY_MOTORS],
+                    tau_ff=action_out.tau_ff[:NUM_BODY_MOTORS],
+                )
             last_hw_time = time.time()
 
 

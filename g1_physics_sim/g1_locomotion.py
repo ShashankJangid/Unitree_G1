@@ -92,14 +92,14 @@ class G1LocomotionEngine:
         l_sw = max(0.0, s)
         r_sw = max(0.0, -s)
 
-        q[L_HIP_PITCH] += -step_len * c - 0.22 * l_sw
-        q[R_HIP_PITCH] += step_len * c - 0.22 * r_sw
+        q[L_HIP_PITCH] += -step_len * c - 0.26 * l_sw
+        q[R_HIP_PITCH] += step_len * c - 0.26 * r_sw
 
-        q[L_KNEE] += 0.45 * l_sw
-        q[R_KNEE] += 0.45 * r_sw
+        q[L_KNEE] += 0.55 * l_sw
+        q[R_KNEE] += 0.55 * r_sw
 
-        q[L_ANKLE_PITCH] += -0.22 * l_sw + 0.15 * c * step_len
-        q[R_ANKLE_PITCH] += -0.22 * r_sw - 0.15 * c * step_len
+        q[L_ANKLE_PITCH] += -0.26 * l_sw + 0.15 * c * step_len
+        q[R_ANKLE_PITCH] += -0.26 * r_sw - 0.15 * c * step_len
 
         yaw_bias = 0.12 * self.cur_vyaw * s
         q[L_HIP_YAW] += yaw_bias + 0.2 * self.cur_vyaw

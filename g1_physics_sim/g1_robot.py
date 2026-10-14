@@ -313,39 +313,40 @@ class G1Robot:
             fz = kp_z * (target_z - self.data.qpos[2]) - kd_z * self.data.qvel[2] + 35.0 * 9.81
 
             w, x, y, z = float(self.data.qpos[3]), float(self.data.qpos[4]), float(self.data.qpos[5]), float(self.data.qpos[6])
-            siny_cosp = 2.0 * (w * z + x * y)
-            cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-            current_yaw = math.atan2(siny_cosp, cosy_cosp)
+            current_yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
 
             if self.is_walking:
-                self.target_yaw += self.walk_wz * PHYSICS_DT
+                self.target_yaw = (self.target_yaw + self.walk_wz * PHYSICS_DT + math.pi) % (2.0 * math.pi) - math.pi
                 cos_h = math.cos(current_yaw)
                 sin_h = math.sin(current_yaw)
                 world_vx = cos_h * self.walk_vx - sin_h * self.walk_vy
                 world_vy = sin_h * self.walk_vx + cos_h * self.walk_vy
                 fx = 70.0 * (world_vx - self.data.qvel[0])
                 fy = 70.0 * (world_vy - self.data.qvel[1])
-
-                yaw_err = (self.target_yaw - current_yaw + math.pi) % (2.0 * math.pi) - math.pi
-                tz = 160.0 * yaw_err + 35.0 * (self.walk_wz - self.data.qvel[5])
             else:
                 self.target_yaw = current_yaw
                 fx = 600.0 * (0.0 - self.data.qpos[0]) - 120.0 * self.data.qvel[0]
                 fy = 600.0 * (0.0 - self.data.qpos[1]) - 120.0 * self.data.qvel[1]
-                yaw_err = -current_yaw
-                tz = 200.0 * yaw_err - 35.0 * self.data.qvel[5]
+
+            R = self.data.xmat[self.pelvis_bid].reshape(3, 3)
+            cy = math.cos(self.target_yaw)
+            sy = math.sin(self.target_yaw)
+            R_des = np.array([[cy, -sy, 0.0], [sy, cy, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+            M = R_des @ R.T
+            ex = 0.5 * (M[2, 1] - M[1, 2])
+            ey = 0.5 * (M[0, 2] - M[2, 0])
+            ez = 0.5 * (M[1, 0] - M[0, 1])
+
+            ww = R @ self.data.qvel[3:6]
+            des_wz = self.walk_wz if self.is_walking else 0.0
+
+            tx = kp_att * ex - kd_att * ww[0]
+            ty = kp_att * ey - kd_att * ww[1]
+            tz = 160.0 * ez + 35.0 * (des_wz - ww[2]) if self.is_walking else 200.0 * ez - 35.0 * ww[2]
 
             self.data.xfrc_applied[self.pelvis_bid, 0] = np.clip(fx, -120.0, 120.0)
             self.data.xfrc_applied[self.pelvis_bid, 1] = np.clip(fy, -120.0, 120.0)
             self.data.xfrc_applied[self.pelvis_bid, 2] = np.clip(fz, 0.0, 600.0)
-
-            roll_err = -2.0 * (w * x + y * z)
-            sinp = 2.0 * (w * y - z * x)
-            pitch_err = -math.asin(max(-1.0, min(1.0, sinp)))
-
-            tx = kp_att * roll_err - kd_att * self.data.qvel[3]
-            ty = kp_att * pitch_err - kd_att * self.data.qvel[4]
-
             self.data.xfrc_applied[self.pelvis_bid, 3] = np.clip(tx, -120.0, 120.0)
             self.data.xfrc_applied[self.pelvis_bid, 4] = np.clip(ty, -120.0, 120.0)
             self.data.xfrc_applied[self.pelvis_bid, 5] = np.clip(tz, -60.0, 60.0)
