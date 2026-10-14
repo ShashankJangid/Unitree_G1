@@ -81,32 +81,32 @@ class G1LocomotionEngine:
         s = np.sin(self.phase)
         c = np.cos(self.phase)
 
-        step_len = self.cur_vx * 0.45
-        sway = 0.05 * s
+        step_len = self.cur_vx * 0.40
+        sway = 0.035 * s
 
-        q[L_HIP_ROLL] = sway + self.cur_vy * 0.2
-        q[R_HIP_ROLL] = sway + self.cur_vy * 0.2
-        q[L_ANKLE_ROLL] = -sway * 0.85
-        q[R_ANKLE_ROLL] = -sway * 0.85
+        q[L_HIP_ROLL] = sway + self.cur_vy * 0.15
+        q[R_HIP_ROLL] = -sway + self.cur_vy * 0.15
+        q[L_ANKLE_ROLL] = -sway * 0.7
+        q[R_ANKLE_ROLL] = sway * 0.7
 
         l_sw = max(0.0, s)
         r_sw = max(0.0, -s)
 
-        q[L_HIP_PITCH] += -step_len * c - 0.28 * l_sw
-        q[R_HIP_PITCH] += step_len * c - 0.28 * r_sw
+        q[L_HIP_PITCH] += -step_len * c - 0.22 * l_sw
+        q[R_HIP_PITCH] += step_len * c - 0.22 * r_sw
 
-        q[L_KNEE] += 0.55 * l_sw
-        q[R_KNEE] += 0.55 * r_sw
+        q[L_KNEE] += 0.45 * l_sw
+        q[R_KNEE] += 0.45 * r_sw
 
-        q[L_ANKLE_PITCH] += -0.25 * l_sw + 0.18 * c * step_len
-        q[R_ANKLE_PITCH] += -0.25 * r_sw - 0.18 * c * step_len
+        q[L_ANKLE_PITCH] += -0.22 * l_sw + 0.15 * c * step_len
+        q[R_ANKLE_PITCH] += -0.22 * r_sw - 0.15 * c * step_len
 
-        yaw_bias = 0.18 * self.cur_vyaw * s
-        q[L_HIP_YAW] += yaw_bias + 0.25 * self.cur_vyaw
-        q[R_HIP_YAW] += yaw_bias - 0.25 * self.cur_vyaw
-        q[WAIST_YAW] = -0.15 * yaw_bias
+        yaw_bias = 0.12 * self.cur_vyaw * s
+        q[L_HIP_YAW] += yaw_bias + 0.2 * self.cur_vyaw
+        q[R_HIP_YAW] += yaw_bias - 0.2 * self.cur_vyaw
+        q[WAIST_YAW] = -0.1 * yaw_bias
 
-        arm_swing = step_len * 0.9
+        arm_swing = step_len * 0.7
         q[L_SHOULDER_PITCH] += arm_swing * c
         q[R_SHOULDER_PITCH] -= arm_swing * c
 

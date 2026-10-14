@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 import pathlib
 from typing import Dict, List, Optional, Tuple
 import numpy as np
@@ -63,6 +64,7 @@ class G1Robot:
         self.walk_vx = 0.0
         self.walk_vy = 0.0
         self.walk_wz = 0.0
+        self.target_yaw = 0.0
 
         base = pathlib.Path(__file__).resolve().parent
         if xml_path is None:
@@ -309,30 +311,37 @@ class G1Robot:
             kd_att = 60.0
 
             fz = kp_z * (target_z - self.data.qpos[2]) - kd_z * self.data.qvel[2] + 35.0 * 9.81
+
+            w, x, y, z = float(self.data.qpos[3]), float(self.data.qpos[4]), float(self.data.qpos[5]), float(self.data.qpos[6])
+            siny_cosp = 2.0 * (w * z + x * y)
+            cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+            current_yaw = math.atan2(siny_cosp, cosy_cosp)
+
             if self.is_walking:
-                heading = -2.0 * (self.data.qpos[3] * self.data.qpos[6] + self.data.qpos[4] * self.data.qpos[5])
-                cos_h = np.cos(heading)
-                sin_h = np.sin(heading)
+                self.target_yaw += self.walk_wz * PHYSICS_DT
+                cos_h = math.cos(current_yaw)
+                sin_h = math.sin(current_yaw)
                 world_vx = cos_h * self.walk_vx - sin_h * self.walk_vy
                 world_vy = sin_h * self.walk_vx + cos_h * self.walk_vy
-                fx = 80.0 * (world_vx - self.data.qvel[0])
-                fy = 80.0 * (world_vy - self.data.qvel[1])
-                tz = 40.0 * (self.walk_wz - self.data.qvel[5])
-            else:
-                target_x = 0.0
-                target_y = 0.0
-                fx = 600.0 * (target_x - self.data.qpos[0]) - 120.0 * self.data.qvel[0]
-                fy = 600.0 * (target_y - self.data.qpos[1]) - 120.0 * self.data.qvel[1]
-                yaw_err = -2.0 * (self.data.qpos[3] * self.data.qpos[6] + self.data.qpos[4] * self.data.qpos[5])
-                tz = 200.0 * yaw_err - 30.0 * self.data.qvel[5]
+                fx = 70.0 * (world_vx - self.data.qvel[0])
+                fy = 70.0 * (world_vy - self.data.qvel[1])
 
-            self.data.xfrc_applied[self.pelvis_bid, 0] = np.clip(fx, -150.0, 150.0)
-            self.data.xfrc_applied[self.pelvis_bid, 1] = np.clip(fy, -150.0, 150.0)
+                yaw_err = (self.target_yaw - current_yaw + math.pi) % (2.0 * math.pi) - math.pi
+                tz = 160.0 * yaw_err + 35.0 * (self.walk_wz - self.data.qvel[5])
+            else:
+                self.target_yaw = current_yaw
+                fx = 600.0 * (0.0 - self.data.qpos[0]) - 120.0 * self.data.qvel[0]
+                fy = 600.0 * (0.0 - self.data.qpos[1]) - 120.0 * self.data.qvel[1]
+                yaw_err = -current_yaw
+                tz = 200.0 * yaw_err - 35.0 * self.data.qvel[5]
+
+            self.data.xfrc_applied[self.pelvis_bid, 0] = np.clip(fx, -120.0, 120.0)
+            self.data.xfrc_applied[self.pelvis_bid, 1] = np.clip(fy, -120.0, 120.0)
             self.data.xfrc_applied[self.pelvis_bid, 2] = np.clip(fz, 0.0, 600.0)
 
-            q_curr = self.data.qpos[3:7]
-            roll_err = -2.0 * (q_curr[0] * q_curr[1] + q_curr[2] * q_curr[3])
-            pitch_err = -2.0 * (q_curr[0] * q_curr[2] - q_curr[3] * q_curr[1])
+            roll_err = -2.0 * (w * x + y * z)
+            sinp = 2.0 * (w * y - z * x)
+            pitch_err = -math.asin(max(-1.0, min(1.0, sinp)))
 
             tx = kp_att * roll_err - kd_att * self.data.qvel[3]
             ty = kp_att * pitch_err - kd_att * self.data.qvel[4]
