@@ -773,8 +773,20 @@ def simulate_g1(
         def check_console():
             while msvcrt.kbhit():
                 try:
-                    c = msvcrt.getch().decode('utf-8', errors='ignore')
-                    process_key(c)
+                    c = msvcrt.getch()
+                    if c in (b'\x00', b'\xe0'):
+                        ext = msvcrt.getch()
+                        if ext == b'H':
+                            process_key('w')
+                        elif ext == b'P':
+                            process_key('s')
+                        elif ext == b'K':
+                            process_key('a')
+                        elif ext == b'M':
+                            process_key('d')
+                    else:
+                        ch = c.decode('utf-8', errors='ignore')
+                        process_key(ch)
                 except Exception:
                     pass
     except ImportError:
