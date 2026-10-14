@@ -7,54 +7,60 @@ from typing import List, Optional, Tuple
 import numpy as np
 import mujoco
 from mujoco import viewer as mj_viewer
-try:  # package and flat-script imports both work
+
+ROBOT_IP = '192.168.123.99'
+
+try:
     from .g1_constants import (    OFFICIAL_KP, OFFICIAL_KD, NOMINAL_STAND_Q, NUM_BODY_MOTORS,
     JOINT_NAMES_29DOF, L_SHOULDER_PITCH, L_WRIST_YAW, R_SHOULDER_PITCH, R_WRIST_YAW,
-    LEFT_ARM_JOINTS, RIGHT_ARM_JOINTS, LEG_JOINTS, WAIST_JOINTS)
-except ImportError:  # pragma: no cover - flat script layout
+    LEFT_ARM_JOINTS, RIGHT_ARM_JOINTS, LEG_JOINTS, WAIST_JOINTS,
+    MODE_PR, DDS_DOMAIN_SIM, DDS_DOMAIN_REAL)
+except ImportError:
     from g1_constants import (OFFICIAL_KP, OFFICIAL_KD, NOMINAL_STAND_Q, NUM_BODY_MOTORS,
 JOINT_NAMES_29DOF, L_SHOULDER_PITCH, L_WRIST_YAW, R_SHOULDER_PITCH, R_WRIST_YAW,
-LEFT_ARM_JOINTS, RIGHT_ARM_JOINTS, LEG_JOINTS, WAIST_JOINTS)
-try:  # package and flat-script imports both work
+LEFT_ARM_JOINTS, RIGHT_ARM_JOINTS, LEG_JOINTS, WAIST_JOINTS,
+MODE_PR, DDS_DOMAIN_SIM, DDS_DOMAIN_REAL)
+try:
     from .g1_robot import (    G1Robot)
-except ImportError:  # pragma: no cover - flat script layout
+except ImportError:
     from g1_robot import (G1Robot)
-try:  # package and flat-script imports both work
+try:
     from .g1_hardware_bridge import (    create_g1_bridge,
     G1RealHardwareBridge)
-except ImportError:  # pragma: no cover - flat script layout
+except ImportError:
     from g1_hardware_bridge import (create_g1_bridge,
 G1RealHardwareBridge)
-try:  # package and flat-script imports both work
+try:
     from .g1_trajectory_manager import (    TrajectoryRecorder,
     TrajectoryPlayer,
     G1MovementScripts)
-except ImportError:  # pragma: no cover - flat script layout
+except ImportError:
     from g1_trajectory_manager import (TrajectoryRecorder,
 TrajectoryPlayer,
 G1MovementScripts)
-try:  # package and flat-script imports both work
+try:
     from .g1_policy import (    UnitreeG1Robot)
-except ImportError:  # pragma: no cover - flat script layout
+except ImportError:
     from g1_policy import (UnitreeG1Robot)
-try:  # package and flat-script imports both work
+try:
     from .g1_policies import (    StandPolicy,
     AnkleSwingPolicy,
     WavePolicy,
+    ArmSwingPolicy,
     JointPositionPolicy)
-except ImportError:  # pragma: no cover - flat script layout
+except ImportError:
     from g1_policies import (StandPolicy,
 AnkleSwingPolicy,
 WavePolicy,
 JointPositionPolicy)
-try:  # package and flat-script imports both work
+try:
     from .g1_state import (    G1State)
-except ImportError:  # pragma: no cover - flat script layout
+except ImportError:
     from g1_state import (G1State)
-try:  # package and flat-script imports both work
+try:
     from .g1_safety import (    G1FullSafetyManager,
     SafetyState)
-except ImportError:  # pragma: no cover - flat script layout
+except ImportError:
     from g1_safety import (G1FullSafetyManager,
 SafetyState)
 
@@ -196,54 +202,73 @@ def main():
     print('=' * 72)
 
     robot = G1Robot(fix_base=fix_base)
-    bridge = create_g1_bridge(mode='hardware' if use_hardware else 'sim', iface=args.iface, domain_id=domain_id, robot=robot)
+    bridge = create_g1_bridge(mode='hardware' if use_hardware else 'sim',
+                              iface=args.iface, domain_id=domain_id, robot=robot)
     controller = G1CartesianController(robot, right_arm=args.right_arm)
     recorder = TrajectoryRecorder()
     player: Optional[TrajectoryPlayer] = None
     last_saved_file: Optional[pathlib.Path] = None
 
-
-    policy_robot = None
-    if args.policy and not use_hardware:
+    policy_runner = None
+    if args.policy:
+        pol = None
         if args.policy == 'stand':
-            policy_robot = UnitreeG1Robot(mode='sim', num_motors=NUM_BODY_MOTORS, fix_base=fix_base)
-            policy_robot.set_policy(StandPolicy(enable_arm_sdk=True))
+            pol = StandPolicy()
         elif args.policy == 'ankle_swing':
-            policy_robot = UnitreeG1Robot(mode='sim', num_motors=NUM_BODY_MOTORS, fix_base=fix_base)
-            policy_robot.set_policy(AnkleSwingPolicy(right_arm=args.right_arm))
+            pol = AnkleSwingPolicy(duration=args.duration or 3.0)
         elif args.policy == 'wave':
-            policy_robot = UnitreeG1Robot(mode='sim', num_motors=NUM_BODY_MOTORS, fix_base=fix_base)
-            policy_robot.set_policy(WavePolicy(right_arm=args.right_arm))
+            pol = WavePolicy(right_arm=args.right_arm)
         elif args.policy == 'joint_pos':
-            policy_robot = UnitreeG1Robot(mode='sim', num_motors=NUM_BODY_MOTORS, fix_base=fix_base)
-            policy_robot.set_policy(JointPositionPolicy(target_q=NOMINAL_STAND_Q))
-
-        if policy_robot:
-            policy_robot.start()
-            print(f"[POLICY] Started {args.policy} policy in background")
+            pol = JointPositionPolicy(NOMINAL_STAND_Q)
+        elif args.policy == 'arm_swing':
+            pol = ArmSwingPolicy(right_arm=args.right_arm)
+        if pol is not None:
+            policy_runner = pol
+            print(f'[POLICY] Driving {args.policy}; interactive Cartesian control is overridden.')
 
     if args.play:
         try:
             player = TrajectoryPlayer(args.play)
             player.start_playback(loop=args.loop)
         except Exception as e:
-            print(f"[ERROR] Could not load trajectory '{args.play}': {e}")
+            print(f'[ERROR] Could not load trajectory {args.play!r}: {e}')
 
     if use_hardware and isinstance(bridge, G1RealHardwareBridge):
-        if bridge.wait_for_robot(timeout=5.0):
-            real_q, _ = bridge.get_joint_states()
-            controller.target_q[:] = real_q[:]
-            robot.reset(real_q)
-            print('[SYNC] Successfully synchronized simulation with physical G1 joint pose!')
-        else:
-            print('[WARN] Robot not responding. Check Ethernet cable and IP (192.168.123.99).')
+        if not bridge.wait_for_robot(timeout=5.0):
+            print('[FATAL] No LowState on DDS. Nothing will be published.')
+            return 4
+        problems = bridge.validate_state()
+        if problems:
+            print('[FATAL] Pre-flight failed; nothing will be published:')
+            for p in problems:
+                print(f'  - {p}')
+            return 5
+        real_q, _ = bridge.get_joint_states()
+        controller.target_q[:] = real_q[:NUM_BODY_MOTORS]
+        robot.reset(real_q[:NUM_BODY_MOTORS])
+        print(f'[SYNC] Synchronised with the physical G1. Robot IP is {ROBOT_IP}; '
+              'your PC must be a different 192.168.123.x address.')
+        if policy_runner is not None and not bridge.start_streaming():
+            print('[FATAL] start_streaming() refused.')
+            return 6
 
     target_pos = robot.get_hand_pos(controller.right_arm).copy()
     last_mocap_pos = target_pos.copy()
     robot.set_target_marker(target_pos)
     safety_mgr = G1FullSafetyManager(controller.target_q)
-    safety_mgr.set_state(SafetyState.ACTIVE_TELEOP)
+    safety_mgr.set_state(SafetyState.DISARMED)
     safety_mgr.feed_watchdog()
+
+    policy_rate = 50
+    policy_t0 = 0.0
+    t_start = time.time()
+    policy_kp = OFFICIAL_KP.copy()
+    policy_kd = OFFICIAL_KD.copy()
+    action = G1Action()
+    if policy_runner is not None:
+        policy_runner.reset(G1State(timestamp=0.0,
+                                    q=robot.get_joint_positions(),
+                                    dq=robot.get_joint_velocities()))
     active_script_pts: Optional[List[np.ndarray]] = None
     script_pt_idx = 0
     choreography_mode = 0
@@ -438,10 +463,31 @@ def main():
                     active_script_pts = None
 
 
-            if policy_robot and policy_robot.is_running():
-                state = policy_robot.get_state()
-                if state:
-                    is_playing_trajectory = True
+            if policy_runner is not None:
+                if policy_runner.get_info().get('t') is None or \
+                        (time.time() - policy_t0) >= (1.0 / policy_rate):
+                    policy_t0 = time.time()
+                    st = G1State(
+                        timestamp=time.time() - t_start,
+                        q=robot.get_joint_positions(),
+                        dq=robot.get_joint_velocities(),
+                        tau_est=robot.get_joint_torques(),
+                        base_pos=robot.get_base_pose()[0],
+                        base_quat=robot.get_base_pose()[1],
+                        left_wrist_pos=robot.get_hand_pos(False),
+                        right_wrist_pos=robot.get_hand_pos(True),
+                        imu_angvel=robot.get_imu_data()[1],
+                        imu_linacc=robot.get_imu_data()[2],
+                        left_foot_contact=robot.get_foot_contacts()[0],
+                        right_foot_contact=robot.get_foot_contacts()[1],
+                    )
+                    pol_action = policy_runner.step(st)
+                    controller.target_q[:] = pol_action.q_des[:NUM_BODY_MOTORS]
+                    policy_kp = pol_action.kp
+                    policy_kd = pol_action.kd
+                    action.mode_pr = pol_action.mode_pr
+                    robot.set_mode_pr(pol_action.mode_pr == MODE_PR)
+                is_playing_trajectory = True
 
             if not is_playing_trajectory:
                 safe_target, was_clamped = controller.step_ik(target_pos)
@@ -452,7 +498,6 @@ def main():
 
             robot.set_target_marker(safe_target)
             last_mocap_pos = safe_target.copy()
-
 
             if recorder.is_recording:
                 state = G1State(
@@ -471,22 +516,23 @@ def main():
                 )
                 action = G1Action()
                 action.q_des[:] = controller.target_q
-                action.kp[:] = OFFICIAL_KP[:NUM_BODY_MOTORS]
-                action.kd[:] = OFFICIAL_KD[:NUM_BODY_MOTORS]
+                action.kp[:] = policy_kp
+                action.kd[:] = policy_kd
                 recorder.record_state(state, action, safe_target)
 
-
             safety_mgr.feed_watchdog()
-            guarded_q, safety_status = safety_mgr.filter_and_guard(
+            guarded, safety_status = safety_mgr.filter_and_guard(
                 target_q=controller.target_q,
                 current_q=robot.get_joint_positions(),
                 current_torques=robot.get_joint_torques(),
-                left_hand_p=robot.get_hand_pos(False),
-                right_hand_p=robot.get_hand_pos(True),
+                left_wrist_p=robot.get_hand_pos(False),
+                right_wrist_p=robot.get_hand_pos(True),
                 pelvis_p=robot.get_base_pose()[0],
                 base_height=float(robot.get_base_pose()[0][2]),
             )
-            controller.target_q[:] = guarded_q[:]
+            controller.target_q[:] = guarded.q_des[:NUM_BODY_MOTORS]
+            robot.kp[:] = guarded.kp[:NUM_BODY_MOTORS]
+            robot.kd[:] = guarded.kd[:NUM_BODY_MOTORS]
 
 
             for _ in range(10):
@@ -510,7 +556,7 @@ def main():
                 play_tag = ' [PLAYING]' if player is not None and player.is_playing else ''
                 script_tag = ' [SCRIPT]' if active_script_pts is not None else ''
                 hw_status = ' [HW: ACTIVE ]' if bridge.is_hardware_active() else ' [HW: STANDBY]' if use_hardware else ' [SIMULATION]'
-                policy_tag = f' [POLICY: {args.policy.upper()}]' if policy_robot and policy_robot.is_running() else ''
+                policy_tag = f' [POLICY: {args.policy.upper()}]' if policy_runner is not None else ''
                 safety_tag = f' [{safety_status.state.value}]'
                 sys.stdout.write(f'\r[{arm_str}]{hw_status}{safety_tag}{rec_tag}{play_tag}{script_tag}{policy_tag} Target:[{safe_target[0]:.2f}, {safe_target[1]:.2f}, {safe_target[2]:.2f}]m | Hand:[{hand_p[0]:.2f}, {hand_p[1]:.2f}, {hand_p[2]:.2f}]m | Reach:{reach_len:4.1f}cm | Err:{err:3.1f}cm{clamp_tag}')
                 sys.stdout.flush()
@@ -522,8 +568,6 @@ def main():
 
     if recorder.is_recording:
         recorder.stop_and_save()
-    if policy_robot:
-        policy_robot.stop()
     bridge.close()
     print('\nSimulation session terminated cleanly.')
 

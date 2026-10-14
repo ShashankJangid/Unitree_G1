@@ -28,33 +28,33 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-try:  # package and flat-script imports both work
+try:
     from .g1_constants import (    NUM_BODY_MOTORS, POLICY_FREQ, POLICY_DT, LOWCMD_CONTROL_DT,
     DDS_DOMAIN_SIM, DDS_DOMAIN_REAL, ARM_SDK_CONTROL_DT,
     OFFICIAL_KP, OFFICIAL_KD, NOMINAL_STAND_Q,
     LEG_JOINTS, WAIST_JOINTS, LEFT_ARM_JOINTS, RIGHT_ARM_JOINTS,
     MAX_JOINT_VELOCITY_FULL, FALL_HEIGHT_THRESHOLD,
     MOTOR_MODE_ENABLE, MOTOR_MODE_DISABLE)
-except ImportError:  # pragma: no cover - flat script layout
+except ImportError:
     from g1_constants import (NUM_BODY_MOTORS, POLICY_FREQ, POLICY_DT, LOWCMD_CONTROL_DT,
 DDS_DOMAIN_SIM, DDS_DOMAIN_REAL, ARM_SDK_CONTROL_DT,
 OFFICIAL_KP, OFFICIAL_KD, NOMINAL_STAND_Q,
 LEG_JOINTS, WAIST_JOINTS, LEFT_ARM_JOINTS, RIGHT_ARM_JOINTS,
 MAX_JOINT_VELOCITY_FULL, FALL_HEIGHT_THRESHOLD,
 MOTOR_MODE_ENABLE, MOTOR_MODE_DISABLE)
-try:  # package and flat-script imports both work
+try:
     from .g1_hardware_bridge import (    G1Bridge,
     G1RealHardwareBridge,
     create_g1_bridge)
-except ImportError:  # pragma: no cover - flat script layout
+except ImportError:
     from g1_hardware_bridge import (G1Bridge,
 G1RealHardwareBridge,
 create_g1_bridge)
-try:  # package and flat-script imports both work
+try:
     from .g1_state import (    G1Action,
     G1Observation,
     G1State)
-except ImportError:  # pragma: no cover - flat script layout
+except ImportError:
     from g1_state import (G1Action,
 G1Observation,
 G1State)
@@ -95,8 +95,6 @@ class UnitreeG1Robot:
         domain_id: Optional[int] = None,
         policy_rate: int = POLICY_FREQ,
         control_path: str = 'full',
-        fix_base: bool = True,
-        enable_elastic_band: bool = False,
         robot=None,
         max_joint_velocity: float = MAX_JOINT_VELOCITY_FULL,
         fall_height_threshold: float = FALL_HEIGHT_THRESHOLD,
@@ -141,7 +139,6 @@ class UnitreeG1Robot:
               f'iface={iface} domain={domain_id} '
               f'control={1.0 / self.control_dt:.0f}Hz policy={self.policy_rate}Hz')
 
-    # ------------------------------------------------------------- lifecycle
     def set_policy(self, policy: Policy) -> None:
         self._policy = policy
         print(f'[UnitreeG1Robot] policy={type(policy).__name__}')
@@ -170,7 +167,6 @@ class UnitreeG1Robot:
                 print('[UnitreeG1Robot] start_streaming() refused.')
                 return False
 
-        # Prime state so the policy sees a valid first observation.
         self._update_state()
         if self._policy is not None and self._latest_state is not None:
             try:
@@ -226,7 +222,6 @@ class UnitreeG1Robot:
         print('[UnitreeG1Robot] E-stop cleared')
         return True
 
-    # ---------------------------------------------------------------- loops
     def _control_loop(self) -> None:
         period = self.control_dt
         next_t = time.perf_counter()
@@ -244,7 +239,7 @@ class UnitreeG1Robot:
             next_t += period
             sleep_s = next_t - time.perf_counter()
             if sleep_s < 0:
-                next_t = time.perf_counter()  # overran; resync
+                next_t = time.perf_counter()
             else:
                 time.sleep(sleep_s)
 
@@ -285,7 +280,6 @@ class UnitreeG1Robot:
             dq_des=action.dq_des, tau_ff=action.tau_ff,
         )
 
-    # ---------------------------------------------------------------- state
     def _update_state(self) -> None:
         q, dq = self.bridge.get_joint_states()
         imu_quat, imu_angvel, imu_linacc = self.bridge.get_imu_state()
@@ -325,7 +319,6 @@ class UnitreeG1Robot:
         with self._state_lock:
             self._latest_state = state
 
-    # --------------------------------------------------------------- safety
     def _check_safety(self) -> None:
         with self._state_lock:
             state = self._latest_state
@@ -340,7 +333,6 @@ class UnitreeG1Robot:
             self.emergency_stop('non-finite joint feedback')
             return
 
-        # Overspeed is a soft condition: hold position, do not latch E-stop.
         if np.any(np.abs(state.dq) > self.max_joint_velocity):
             with self._state_lock:
                 if self._latest_action is not None:
@@ -354,7 +346,6 @@ class UnitreeG1Robot:
                 if base_h < self.fall_height_threshold:
                     self.emergency_stop(f'fall: base z={base_h:.2f}m')
 
-    # -------------------------------------------------------------- getters
     def get_state(self) -> Optional[G1State]:
         with self._state_lock:
             return copy.deepcopy(self._latest_state) if self._latest_state else None
@@ -391,14 +382,11 @@ def run_policy(
     policy_rate: int = POLICY_FREQ,
     control_path: str = 'full',
     duration: Optional[float] = None,
-    fix_base: bool = True,
-    enable_elastic_band: bool = False,
     robot=None,
 ) -> UnitreeG1Robot:
     runner = UnitreeG1Robot(
         mode=mode, iface=iface, domain_id=domain_id, policy_rate=policy_rate,
-        control_path=control_path, fix_base=fix_base,
-        enable_elastic_band=enable_elastic_band, robot=robot,
+        control_path=control_path, robot=robot,
     )
     runner.set_policy(policy)
     if runner.start():

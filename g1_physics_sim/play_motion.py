@@ -4,23 +4,27 @@ import sys
 import time
 import numpy as np
 from mujoco import viewer as mj_viewer
-try:  # package and flat-script imports both work
-    from .g1_constants import (    NOMINAL_STAND_Q)
-except ImportError:  # pragma: no cover - flat script layout
-    from g1_constants import (NOMINAL_STAND_Q)
-try:  # package and flat-script imports both work
+try:
+    from .g1_constants import (    NOMINAL_STAND_Q,
+    JOINT_LIMITS_MIN,
+    JOINT_LIMITS_MAX)
+except ImportError:
+    from g1_constants import (NOMINAL_STAND_Q,
+JOINT_LIMITS_MIN,
+JOINT_LIMITS_MAX)
+try:
     from .g1_robot import (    G1Robot)
-except ImportError:  # pragma: no cover - flat script layout
+except ImportError:
     from g1_robot import (G1Robot)
-try:  # package and flat-script imports both work
+try:
     from .g1_hardware_bridge import (    create_g1_bridge,
     G1RealHardwareBridge)
-except ImportError:  # pragma: no cover - flat script layout
+except ImportError:
     from g1_hardware_bridge import (create_g1_bridge,
 G1RealHardwareBridge)
-try:  # package and flat-script imports both work
+try:
     from .g1_trajectory_manager import (    TrajectoryPlayer)
-except ImportError:  # pragma: no cover - flat script layout
+except ImportError:
     from g1_trajectory_manager import (TrajectoryPlayer)
 
 def play_motion():
@@ -50,30 +54,57 @@ def play_motion():
     robot = G1Robot(fix_base=not args.free_standing)
     bridge = create_g1_bridge(mode='hardware' if args.hardware else 'sim', iface=args.iface, robot=robot)
     player = TrajectoryPlayer(motion_file)
+
     if args.hardware and isinstance(bridge, G1RealHardwareBridge):
-        if bridge.wait_for_robot(timeout=3.0):
-            real_q, _ = bridge.get_joint_states()
-            robot.reset(real_q)
-            bridge.toggle_streaming()
-            print('[SYNC] Connected to physical G1 robot. Starting playback in 1 second...')
-            time.sleep(1.0)
-        else:
-            print('[ERROR] Robot handshake failed. Aborting playback.')
+        if not bridge.wait_for_robot(timeout=5.0):
+            print('[ERROR] No LowState received. Check power, cable, NIC and subnet.')
             sys.exit(1)
+        problems = bridge.validate_state()
+        if problems:
+            print('[ERROR] Pre-flight failed; nothing will be published:')
+            for p in problems:
+                print(f'  - {p}')
+            sys.exit(2)
+        real_q, _ = bridge.get_joint_states()
+        robot.reset(real_q)
+        if not bridge.start_streaming():
+            print('[ERROR] start_streaming() refused. Aborting playback.')
+            sys.exit(3)
+        print('[SYNC] Connected to physical G1 robot. Starting playback in 1 second...')
+        print('[SAFETY] E-stop: wireless controller SELECT, or Ctrl+C here.')
+        time.sleep(1.0)
+
     player.start_playback(loop=args.loop)
     current_q = NOMINAL_STAND_Q.copy()
+    current_kp = None
+    current_kd = None
+    lo = JOINT_LIMITS_MIN + 0.03
+    hi = JOINT_LIMITS_MAX - 0.03
+
     with mj_viewer.launch_passive(robot.model, robot.data) as viewer:
         last_hardware_time = time.time()
         last_print_time = time.time()
         while viewer.is_running() and player.is_playing:
             step_start = time.time()
-            q_frame, is_done = player.get_frame(speed_mult=args.speed)
+            q_frame, q_des, kp_frame, kd_frame, is_done = player.get_frame(speed_mult=args.speed)
             if q_frame is not None:
-                current_q[:] = q_frame[:]
+                current_q[:] = np.clip(q_des if q_des is not None else q_frame, lo, hi)
+            if kp_frame is not None:
+                current_kp = kp_frame
+            if kd_frame is not None:
+                current_kd = kd_frame
+            if current_kp is not None:
+                robot.kp[:] = current_kp
+            if current_kd is not None:
+                robot.kd[:] = current_kd
+
             for _ in range(10):
                 robot.step_physics(current_q)
+
             if args.hardware and time.time() - last_hardware_time >= 0.02:
-                bridge.send_joint_targets(current_q)
+                bridge.send_joint_targets(
+                    q_des=current_q,
+                    kp=current_kp, kd=current_kd)
                 last_hardware_time = time.time()
             viewer.sync()
             if time.time() - last_print_time >= 0.3:

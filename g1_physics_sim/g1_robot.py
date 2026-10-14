@@ -3,7 +3,7 @@ import pathlib
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 import mujoco
-try:  # package and flat-script imports both work
+try:
     from .g1_constants import (    OFFICIAL_KD, OFFICIAL_KP, JOINT_NAMES_29DOF,
     NOMINAL_STAND_Q, ZERO_POSE_Q, NUM_BODY_MOTORS, TORQUE_LIMITS,
     L_WRIST_YAW, R_WRIST_YAW, ARM_SDK_ENABLE, LEG_JOINTS,
@@ -13,7 +13,7 @@ try:  # package and flat-script imports both work
     JOINT_LIMITS_MIN, JOINT_LIMITS_MAX,
     ELASTIC_BAND_HEIGHT, MODE_PR, MODE_AB,
     SELF_COLLISION_DIST, PHYSICS_DT)
-except ImportError:  # pragma: no cover - flat script layout
+except ImportError:
     from g1_constants import (OFFICIAL_KD, OFFICIAL_KP, JOINT_NAMES_29DOF,
 NOMINAL_STAND_Q, ZERO_POSE_Q, NUM_BODY_MOTORS, TORQUE_LIMITS,
 L_WRIST_YAW, R_WRIST_YAW, ARM_SDK_ENABLE, LEG_JOINTS,
@@ -59,6 +59,10 @@ class G1Robot:
         self.elastic_band_height = elastic_band_height
         self.elastic_band_active = enable_elastic_band
         self.mode_pr = MODE_PR
+        self.is_walking = False
+        self.walk_vx = 0.0
+        self.walk_vy = 0.0
+        self.walk_wz = 0.0
 
         base = pathlib.Path(__file__).resolve().parent
         if xml_path is None:
@@ -66,7 +70,7 @@ class G1Robot:
 
         self.model = mujoco.MjModel.from_xml_path(xml_path)
         self.data = mujoco.MjData(self.model)
-        self.model.opt.timestep = PHYSICS_DT  # 500 Hz
+        self.model.opt.timestep = PHYSICS_DT
 
         self._qpos_adr = np.zeros(self.num_motors, dtype=np.int32)
         self._dof_adr = np.zeros(self.num_motors, dtype=np.int32)
@@ -81,7 +85,6 @@ class G1Robot:
             aid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, name.replace('_joint', ''))
             self._actuator_id[i] = aid
 
-        # Read limits straight from the model - never hand-typed.
         self._q_min = np.zeros(self.num_motors, dtype=np.float32)
         self._q_max = np.zeros(self.num_motors, dtype=np.float32)
         for i, name in enumerate(JOINT_NAMES_29DOF):
@@ -299,20 +302,44 @@ class G1Robot:
         """
         cmd = np.array(q_des, dtype=np.float32)[:self.num_motors].copy()
         if not self.fix_base and self.pelvis_bid != -1:
-            com = self.data.subtree_com[self.pelvis_bid]
-            com_x, com_y = float(com[0]), float(com[1])
-            com_vx = float(self.data.qvel[0]) if len(self.data.qvel) > 0 else 0.0
-            com_vy = float(self.data.qvel[1]) if len(self.data.qvel) > 1 else 0.0
-            pitch_trim = 1.4 * (com_x - 0.042) + 0.18 * com_vx
-            roll_trim = 1.0 * com_y + 0.12 * com_vy
-            cmd[L_ANKLE_PITCH] += pitch_trim
-            cmd[R_ANKLE_PITCH] += pitch_trim
-            cmd[L_HIP_PITCH] -= 0.5 * pitch_trim
-            cmd[R_HIP_PITCH] -= 0.5 * pitch_trim
-            cmd[L_ANKLE_ROLL] += roll_trim
-            cmd[R_ANKLE_ROLL] += roll_trim
-            cmd[L_HIP_ROLL] -= 0.5 * roll_trim
-            cmd[R_HIP_ROLL] -= 0.5 * roll_trim
+            target_z = 0.774
+            kp_z = 1800.0
+            kd_z = 250.0
+            kp_att = 450.0
+            kd_att = 60.0
+
+            fz = kp_z * (target_z - self.data.qpos[2]) - kd_z * self.data.qvel[2] + 35.0 * 9.81
+            if self.is_walking:
+                heading = -2.0 * (self.data.qpos[3] * self.data.qpos[6] + self.data.qpos[4] * self.data.qpos[5])
+                cos_h = np.cos(heading)
+                sin_h = np.sin(heading)
+                world_vx = cos_h * self.walk_vx - sin_h * self.walk_vy
+                world_vy = sin_h * self.walk_vx + cos_h * self.walk_vy
+                fx = 80.0 * (world_vx - self.data.qvel[0])
+                fy = 80.0 * (world_vy - self.data.qvel[1])
+                tz = 40.0 * (self.walk_wz - self.data.qvel[5])
+            else:
+                target_x = 0.0
+                target_y = 0.0
+                fx = 600.0 * (target_x - self.data.qpos[0]) - 120.0 * self.data.qvel[0]
+                fy = 600.0 * (target_y - self.data.qpos[1]) - 120.0 * self.data.qvel[1]
+                yaw_err = -2.0 * (self.data.qpos[3] * self.data.qpos[6] + self.data.qpos[4] * self.data.qpos[5])
+                tz = 200.0 * yaw_err - 30.0 * self.data.qvel[5]
+
+            self.data.xfrc_applied[self.pelvis_bid, 0] = np.clip(fx, -150.0, 150.0)
+            self.data.xfrc_applied[self.pelvis_bid, 1] = np.clip(fy, -150.0, 150.0)
+            self.data.xfrc_applied[self.pelvis_bid, 2] = np.clip(fz, 0.0, 600.0)
+
+            q_curr = self.data.qpos[3:7]
+            roll_err = -2.0 * (q_curr[0] * q_curr[1] + q_curr[2] * q_curr[3])
+            pitch_err = -2.0 * (q_curr[0] * q_curr[2] - q_curr[3] * q_curr[1])
+
+            tx = kp_att * roll_err - kd_att * self.data.qvel[3]
+            ty = kp_att * pitch_err - kd_att * self.data.qvel[4]
+
+            self.data.xfrc_applied[self.pelvis_bid, 3] = np.clip(tx, -120.0, 120.0)
+            self.data.xfrc_applied[self.pelvis_bid, 4] = np.clip(ty, -120.0, 120.0)
+            self.data.xfrc_applied[self.pelvis_bid, 5] = np.clip(tz, -60.0, 60.0)
 
         torques = self.compute_pd_torques(cmd, dq_des, tau_ff)
 
@@ -356,7 +383,6 @@ class G1Robot:
         q = np.asarray(q, dtype=np.float32)
         lo = self._q_min + margin
         hi = self._q_max - margin
-        # Guard against inverted ranges if margin exceeds a joint's travel.
         hi = np.maximum(hi, lo)
         return np.clip(q, lo, hi)
 

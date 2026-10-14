@@ -398,9 +398,8 @@ def simulate_g1(
     last_mocap_pos = target_pos.copy()
     robot.set_target_marker(target_pos)
     step_size = 0.015
-    active_mode = "WALK" if free_standing else "ARM"
-    if active_mode == "WALK":
-        loco.is_active = True
+    active_mode = "ARM"
+    loco.is_active = False
     squat_elevation = 0.793
     last_saved_traj: Optional[pathlib.Path] = None
     act_runner = None
@@ -881,10 +880,16 @@ def simulate_g1(
         robot.kd[:] = action_out.kd[:NUM_BODY_MOTORS]
 
         if active_mode == "WALK" and loco.is_active:
-            loco.step()
+            robot.is_walking = True
+            robot.walk_vx = loco.lin_vel_x
+            robot.walk_vy = loco.lin_vel_y
+            robot.walk_wz = loco.ang_vel_z
+            target_step_q = loco.step()
             for _ in range(10):
-                robot.step_physics(loco.target_joint_pos, write_ctrl=False)
+                robot.step_physics(target_step_q, write_ctrl=True)
+            controller.target_q[:] = target_step_q[:NUM_BODY_MOTORS]
         else:
+            robot.is_walking = False
             for _ in range(10):
                 robot.step_physics(controller.target_q)
 

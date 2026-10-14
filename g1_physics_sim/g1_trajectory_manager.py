@@ -5,20 +5,20 @@ import pathlib
 import time
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
-try:  # package and flat-script imports both work
+try:
     from .g1_constants import (    JOINT_NAMES_29DOF, NOMINAL_STAND_Q, NUM_BODY_MOTORS,
     L_HIP_PITCH, L_KNEE, L_ANKLE_PITCH, R_HIP_PITCH, R_KNEE, R_ANKLE_PITCH,
     L_SHOULDER_PITCH, L_ELBOW, L_WRIST_ROLL,
     R_SHOULDER_PITCH, R_ELBOW, R_WRIST_ROLL)
-except ImportError:  # pragma: no cover - flat script layout
+except ImportError:
     from g1_constants import (JOINT_NAMES_29DOF, NOMINAL_STAND_Q, NUM_BODY_MOTORS,
 L_HIP_PITCH, L_KNEE, L_ANKLE_PITCH, R_HIP_PITCH, R_KNEE, R_ANKLE_PITCH,
 L_SHOULDER_PITCH, L_ELBOW, L_WRIST_ROLL,
 R_SHOULDER_PITCH, R_ELBOW, R_WRIST_ROLL)
-try:  # package and flat-script imports both work
+try:
     from .g1_state import (    G1State,
     G1Action)
-except ImportError:  # pragma: no cover - flat script layout
+except ImportError:
     from g1_state import (G1State,
 G1Action)
 
@@ -130,9 +130,11 @@ class TrajectoryPlayer:
         if width != NUM_BODY_MOTORS:
             raise ValueError(f'Frame width {width} != {NUM_BODY_MOTORS}')
 
-        self.duration = float(self.data.get('duration_sec', 1.0))
-        if self.duration <= 0:
-            self.duration = float(self.times[-1]) if self.times[-1] > 0 else 1.0
+        self.duration = float(self.data.get('duration_sec', 0.0))
+        fps = float(self.data.get('fps', 50.0)) or 50.0
+        if self.duration <= 0.0:
+            last_t = float(self.times[-1]) if self.times.size else 0.0
+            self.duration = last_t if last_t > 0 else (self.num_frames / fps)
         self.num_frames = len(self.frames)
         self.times = np.array([f['time'] for f in self.frames], dtype=np.float64)
         if not np.all(np.diff(self.times) >= 0):
@@ -186,8 +188,6 @@ class TrajectoryPlayer:
         if q is None:
             return (None, True)
         action = G1Action()
-        # Trajectories store the measured joint_q; when a q_des channel exists
-        # it is the authoritative command (records both).
         action.q_des[:] = q_des if q_des is not None else q
         action.kp[:] = kp if kp is not None else OFFICIAL_KP
         action.kd[:] = kd if kd is not None else OFFICIAL_KD
