@@ -25,7 +25,7 @@ def get_gravity_orientation(quaternion):
 
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"[OFFICIAL RL] Launching Official Unitree G1 Controller on {device.upper()}...")
+    print(f"[OFFICIAL RL] Launching Reactive Unitree G1 Controller on {device.upper()}...")
 
     policy_file = gym_root / "deploy" / "pre_train" / "g1" / "motion.pt"
     if not policy_file.exists():
@@ -62,14 +62,24 @@ def main():
     num_obs = 47
     control_decimation = 10
 
-    target_cmd = np.array([0.4, 0.0, 0.0], dtype=np.float32)
-    cur_cmd = np.array([0.4, 0.0, 0.0], dtype=np.float32)
+    base_cruise_vx = 0.40
+    burst_vx = 0.40
+    burst_vy = 0.00
+    burst_wz = 0.00
+
+    expire_vx = 0.0
+    expire_vy = 0.0
+    expire_wz = 0.0
+
+    target_cmd = np.array([0.40, 0.0, 0.0], dtype=np.float32)
+    cur_cmd = np.array([0.40, 0.0, 0.0], dtype=np.float32)
     action = np.zeros(num_actions, dtype=np.float32)
     target_dof_pos = default_angles.copy()
     obs = np.zeros(num_obs, dtype=np.float32)
 
     def reset_robot():
         nonlocal action, target_dof_pos, obs, target_cmd, cur_cmd
+        nonlocal burst_vx, burst_vy, burst_wz, expire_vx, expire_vy, expire_wz
         mujoco.mj_resetData(m, d)
         d.qpos[0] = 0.0
         d.qpos[1] = 0.0
@@ -80,74 +90,101 @@ def main():
         action = np.zeros(num_actions, dtype=np.float32)
         target_dof_pos = default_angles.copy()
         obs = np.zeros(num_obs, dtype=np.float32)
-        target_cmd[:] = [0.4, 0.0, 0.0]
-        cur_cmd[:] = [0.4, 0.0, 0.0]
+        burst_vx = base_cruise_vx
+        burst_vy = 0.0
+        burst_wz = 0.0
+        expire_vx = 0.0
+        expire_vy = 0.0
+        expire_wz = 0.0
+        target_cmd[:] = [base_cruise_vx, 0.0, 0.0]
+        cur_cmd[:] = [base_cruise_vx, 0.0, 0.0]
         mujoco.mj_forward(m, d)
 
     reset_robot()
 
-    def apply_command(k_str: str):
-        nonlocal target_cmd
+    def handle_reactive_input(k_str: str):
+        nonlocal burst_vx, burst_vy, burst_wz, expire_vx, expire_vy, expire_wz
+        now = time.time()
         k = k_str.lower()
         if k in ('w', 'up'):
-            target_cmd[0] = float(np.clip(target_cmd[0] + 0.1, -0.4, 1.2))
+            burst_vx = 1.00
+            expire_vx = now + 0.65
+            print("[REACTIVE BURST] >> SPRINT FORWARD (1.00 m/s) <<")
+        elif k == 'z':
+            burst_vx = 1.40
+            expire_vx = now + 0.70
+            print("[REACTIVE BURST] >>> MAX TURBO SPRINT (1.40 m/s)! <<<")
         elif k in ('s', 'down'):
-            target_cmd[0] = float(np.clip(target_cmd[0] - 0.1, -0.4, 1.2))
+            burst_vx = -0.35
+            expire_vx = now + 0.60
+            print("[REACTIVE BURST] << ACTIVE BRAKE / REVERSE (-0.35 m/s) >>")
         elif k in ('a', 'left'):
-            target_cmd[2] = float(np.clip(target_cmd[2] + 0.2, -1.0, 1.0))
+            burst_wz = 0.85
+            expire_wz = now + 0.50
+            print("[REACTIVE BURST] <-- SHARP LEFT TURN (+0.85 rad/s) --")
         elif k in ('d', 'right'):
-            target_cmd[2] = float(np.clip(target_cmd[2] - 0.2, -1.0, 1.0))
+            burst_wz = -0.85
+            expire_wz = now + 0.50
+            print("[REACTIVE BURST] -- SHARP RIGHT TURN (-0.85 rad/s) -->")
         elif k == 'q':
-            target_cmd[1] = float(np.clip(target_cmd[1] + 0.1, -0.4, 0.4))
+            burst_vy = 0.45
+            expire_vy = now + 0.50
+            print("[REACTIVE BURST] <<-- STRAFE LEFT (+0.45 m/s) --")
         elif k == 'e':
-            target_cmd[1] = float(np.clip(target_cmd[1] - 0.1, -0.4, 0.4))
+            burst_vy = -0.45
+            expire_vy = now + 0.50
+            print("[REACTIVE BURST] -- STRAFE RIGHT (-0.45 m/s) -->>")
         elif k in (' ', 'x'):
-            target_cmd[:] = [0.4, 0.0, 0.0]
-            print("[CMD] Cruising Walk reset to 0.40 m/s")
+            burst_vx = base_cruise_vx
+            burst_vy = 0.0
+            burst_wz = 0.0
+            expire_vx = 0.0
+            expire_vy = 0.0
+            expire_wz = 0.0
+            print(f"[REACTIVE] Reset to Steady Cruise ({base_cruise_vx:.2f} m/s)")
         elif k == 'r':
-            print("[ACTION] Manual Reset Triggered.")
+            print("[ACTION] Instant Robot Reset Triggered.")
             reset_robot()
-            return
         elif k == 'f':
             d.xfrc_applied[pelvis_bid, 0] = 50.0
             print("[PERTURBATION] >>> Applied 50 N physical push to torso! <<<")
-            return
-
-        print(f"[CMD] vx = {target_cmd[0]:+.2f} m/s | vy = {target_cmd[1]:+.2f} m/s | wz = {target_cmd[2]:+.2f} rad/s")
 
     def viewer_key_callback(keycode: int):
         if keycode in (ord('W'), ord('w'), 265):
-            apply_command('w')
+            handle_reactive_input('w')
+        elif keycode in (ord('Z'), ord('z')):
+            handle_reactive_input('z')
         elif keycode in (ord('S'), ord('s'), 264):
-            apply_command('s')
+            handle_reactive_input('s')
         elif keycode in (ord('A'), ord('a'), 263):
-            apply_command('a')
+            handle_reactive_input('a')
         elif keycode in (ord('D'), ord('d'), 262):
-            apply_command('d')
+            handle_reactive_input('d')
         elif keycode in (ord('Q'), ord('q')):
-            apply_command('q')
+            handle_reactive_input('q')
         elif keycode in (ord('E'), ord('e')):
-            apply_command('e')
+            handle_reactive_input('e')
         elif keycode in (ord(' '), ord('X'), ord('x')):
-            apply_command(' ')
+            handle_reactive_input(' ')
         elif keycode in (ord('R'), ord('r')):
-            apply_command('r')
+            handle_reactive_input('r')
         elif keycode in (ord('F'), ord('f')):
-            apply_command('f')
+            handle_reactive_input('f')
 
-    print("\n" + "=" * 76)
-    print(">>> OFFICIAL UNITREE G1 OMNIDIRECTIONAL LOCOMOTION TELEOP <<<")
-    print("=" * 76)
-    print("  Controls work both inside the MuJoCo 3D Window AND in this Terminal:")
-    print("    W / Up Arrow    : Accelerate Forward (+0.10 m/s)")
-    print("    S / Down Arrow  : Decelerate / Reverse (-0.10 m/s)")
-    print("    A / Left Arrow  : Turn Left (+0.20 rad/s)")
-    print("    D / Right Arrow : Turn Right (-0.20 rad/s)")
-    print("    Q / E           : Strafe Left / Right (+/- 0.10 m/s)")
-    print("    Space / X       : Reset to Steady Cruising Walk (0.40 m/s)")
-    print("    R               : Instant Reset Robot Stance")
+    print("\n" + "=" * 80)
+    print(">>> OFFICIAL UNITREE G1 REACTIVE HIGH-SPEED TELEOPERATION RUNNER <<<")
+    print("=" * 80)
+    print("  High-Responsiveness Time-Burst Mode (Works in 3D Viewer & Terminal):")
+    print("    W / Up Arrow    : Fast Forward Sprint (1.00 m/s burst)")
+    print("    Z               : Turbo Max Sprint (1.40 m/s burst)")
+    print("    S / Down Arrow  : Active Brake / Decel (-0.35 m/s burst)")
+    print("    A / Left Arrow  : Responsive Sharp Turn Left (+0.85 rad/s burst)")
+    print("    D / Right Arrow : Responsive Sharp Turn Right (-0.85 rad/s burst)")
+    print("    Q / E           : Responsive Strafe Left / Right (+/- 0.45 m/s burst)")
+    print("    Space / X       : Return Immediately to Cruise Walk (0.40 m/s)")
+    print("    R               : Instant Robot Reset")
     print("    F               : Torso Push Perturbation (50 N)")
-    print("=" * 76 + "\n")
+    print("=" * 80 + "\n")
 
     counter = 0
     episode = 1
@@ -156,24 +193,30 @@ def main():
     with mujoco.viewer.launch_passive(m, d, key_callback=viewer_key_callback) as viewer:
         while viewer.is_running():
             step_start = time.time()
+            now = time.time()
 
             if msvcrt.kbhit():
                 ch = msvcrt.getch()
                 if ch in (b'\x00', b'\xe0'):
                     ch2 = msvcrt.getch()
                     if ch2 == b'H':
-                        apply_command('w')
+                        handle_reactive_input('w')
                     elif ch2 == b'P':
-                        apply_command('s')
+                        handle_reactive_input('s')
                     elif ch2 == b'K':
-                        apply_command('a')
+                        handle_reactive_input('a')
                     elif ch2 == b'M':
-                        apply_command('d')
+                        handle_reactive_input('d')
                 else:
                     k = ch.decode('utf-8', errors='ignore')
-                    apply_command(k)
+                    handle_reactive_input(k)
 
-            cur_cmd += 0.05 * (target_cmd - cur_cmd)
+            t_vx = burst_vx if now < expire_vx else base_cruise_vx
+            t_vy = burst_vy if now < expire_vy else 0.00
+            t_wz = burst_wz if now < expire_wz else 0.00
+            target_cmd[:] = [t_vx, t_vy, t_wz]
+
+            cur_cmd += 0.12 * (target_cmd - cur_cmd)
 
             tau = (target_dof_pos - d.qpos[7:19]) * kps - d.qvel[6:18] * kds
             d.ctrl[:12] = tau
@@ -223,7 +266,7 @@ def main():
             if time.time() - last_print >= 0.5:
                 print(
                     f"Step: {counter:5d} | Height: {z:.2f}m | "
-                    f"Vel: vx={d.qvel[0]:+.2f}, vy={d.qvel[1]:+.2f}, wz={d.qvel[5]:+.2f} | "
+                    f"Speed: vx={d.qvel[0]:+.2f} m/s, vy={d.qvel[1]:+.2f} m/s, wz={d.qvel[5]:+.2f} rad/s | "
                     f"Cmd: ({cur_cmd[0]:.2f}, {cur_cmd[1]:.2f}, {cur_cmd[2]:.2f})"
                 )
                 last_print = time.time()
