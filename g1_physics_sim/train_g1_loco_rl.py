@@ -62,6 +62,7 @@ def parse_args():
     parser.add_argument('--n-steps', type=int, default=2048)
     parser.add_argument('--checkpoint-interval', type=int, default=50000)
     parser.add_argument('--resume', type=str, default=None)
+    parser.add_argument('--pretrained', action='store_true')
     return parser.parse_args()
 
 
