@@ -46,3 +46,35 @@ Thumbs.db
 .pytest_cache/
 
 official_unitree_repos/
+
+# Test, type-check, lint, and coverage caches
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local secrets; example templates remain versionable
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+!.env.*.example
+!.env.*.sample
+!.env.*.template
+passwords.txt
+credentials.json
+credentials.local.json
+*.local.key
+
+# Generated training runs (not shipped model assets)
+logs/
+runs/
+tensorboard/
+wandb/
+training_output/
+train_output/
+/models/checkpoints_pickup/
