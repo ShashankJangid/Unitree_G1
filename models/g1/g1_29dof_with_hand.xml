@@ -73,21 +73,7 @@
     <mesh name="right_hand_middle_0_link" file="right_hand_middle_0_link.STL" />
     <mesh name="right_hand_middle_1_link" file="right_hand_middle_1_link.STL" />
   </asset>
-
-  <!-- Rigidly weld the pelvis to the world so waist joints cannot move -->
-  <equality>
-    <weld name="lock_waist" body1="pelvis" body2="world"/>
-  </equality>
-
   <worldbody>
-    <!-- ground and lighting for visual context -->
-    <light pos="0 0 2" dir="0 0 -1" directional="true" diffuse="1 1 1"/>
-    <geom name="floor" type="plane" size="5 5 0.05" rgba="0.3 0.3 0.3 1"/>
-
-    <!-- visual marker body for RL target (position updated via mocap_pos) -->
-    <body name="goal_body" pos="0 0 0" mocap="true">
-      <site name="goal_site" type="sphere" size="0.02" rgba="1 0 0 0.6"/>
-    </body>
     <body name="pelvis" pos="0 0 0.793">
       <site name="imu" size="0.01" pos="-0.03959 -0.00224 0.13792" />
       <inertial pos="0 0 -0.07605" quat="1 0 -0.000399148 0" mass="3.813"
@@ -573,8 +559,9 @@
     <motor name="right_ankle_pitch" joint="right_ankle_pitch_joint" ctrlrange="-50 50" />
     <motor name="right_ankle_roll" joint="right_ankle_roll_joint" ctrlrange="-50 50" />
 
-    <!-- waist motors disabled for training -->
-    <!-- waist pitch motor removed to lock torso during training -->
+    <motor name="waist_yaw" joint="waist_yaw_joint" ctrlrange="-88 88" />
+    <motor name="waist_roll" joint="waist_roll_joint" ctrlrange="-50 50" />
+    <motor name="waist_pitch" joint="waist_pitch_joint" ctrlrange="-50 50" />
 
     <motor name="left_shoulder_pitch" joint="left_shoulder_pitch_joint" ctrlrange="-25 25" />
     <motor name="left_shoulder_roll" joint="left_shoulder_roll_joint" ctrlrange="-25 25" />
